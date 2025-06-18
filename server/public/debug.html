@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket连接调试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .debug-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.connecting { background: #fff3cd; color: #856404; }
+        .status.connected { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔧 Socket.IO 连接调试工具</h1>
+    
+    <div class="debug-panel">
+        <h3>连接状态</h3>
+        <div id="status" class="status connecting">未连接</div>
+        <button onclick="testConnection()">测试连接</button>
+        <button onclick="clearLogs()">清空日志</button>
+    </div>
+
+    <div class="debug-panel">
+        <h3>认证测试</h3>
+        <input type="text" id="username" placeholder="用户名" value="testuser">
+        <input type="password" id="password" placeholder="密码" value="123456">
+        <button onclick="testAuth()">测试认证</button>
+        <button onclick="testSocketWithAuth()">带认证连接Socket</button>
+    </div>
+
+    <div class="debug-panel">
+        <h3>消息测试</h3>
+        <input type="text" id="message" placeholder="测试消息" value="Hello World">
+        <button onclick="sendTestMessage()">发送消息</button>
+    </div>
+
+    <div class="debug-panel">
+        <h3>调试日志</h3>
+        <div id="logs" class="log">等待操作...
+</div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let socket = null;
+        let authToken = null;
+        const statusEl = document.getElementById('status');
+        const logsEl = document.getElementById('logs');
+
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            logsEl.textContent += `[${timestamp}] ${message}\n`;
+            logsEl.scrollTop = logsEl.scrollHeight;
+            console.log(message);
+        }
+
+        function updateStatus(status, message) {
+            statusEl.className = `status ${status}`;
+            statusEl.textContent = message;
+            log(`状态更新: ${message}`);
+        }
+
+        function clearLogs() {
+            logsEl.textContent = '日志已清空\n';
+        }
+
+        function testConnection() {
+            log('开始测试基础连接...');
+            updateStatus('connecting', '连接中...');
+            
+            if (socket) {
+                socket.disconnect();
+            }
+
+            socket = io();
+
+            socket.on('connect', () => {
+                log('✅ Socket连接成功');
+                updateStatus('connected', '已连接');
+            });
+
+            socket.on('disconnect', () => {
+                log('❌ Socket连接断开');
+                updateStatus('error', '连接断开');
+            });
+
+            socket.on('connect_error', (error) => {
+                log(`❌ 连接错误: ${error.message}`);
+                updateStatus('error', `连接失败: ${error.message}`);
+            });
+
+            socket.on('error', (error) => {
+                log(`❌ Socket错误: ${error}`);
+            });
+        }
+
+        async function testAuth() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            if (!username || !password) {
+                log('❌ 请输入用户名和密码');
+                return;
+            }
+
+            log(`开始测试认证: ${username}`);
+
+            try {
+                // 先尝试注册
+                log('尝试注册用户...');
+                const registerResponse = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, email: `${username}@test.com` })
+                });
+                
+                const registerData = await registerResponse.json();
+                log(`注册响应: ${JSON.stringify(registerData)}`);
+
+                // 然后尝试登录
+                log('尝试登录...');
+                const loginResponse = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const loginData = await loginResponse.json();
+                log(`登录响应: ${JSON.stringify(loginData)}`);
+
+                if (loginResponse.ok && loginData.success && loginData.data && loginData.data.token) {
+                    authToken = loginData.data.token;
+                    log(`✅ 认证成功，获得Token: ${authToken.substring(0, 20)}...`);
+                } else {
+                    log(`❌ 认证失败: ${loginData.message || '未知错误'}`);
+                }
+            } catch (error) {
+                log(`❌ 认证请求错误: ${error.message}`);
+            }
+        }
+
+        function testSocketWithAuth() {
+            if (!authToken) {
+                log('❌ 请先完成认证获取Token');
+                return;
+            }
+
+            log('开始测试带认证的Socket连接...');
+            updateStatus('connecting', '认证连接中...');
+
+            if (socket) {
+                socket.disconnect();
+            }
+
+            socket = io({
+                auth: {
+                    token: authToken
+                }
+            });
+
+            socket.on('connect', () => {
+                log('✅ 带认证的Socket连接成功');
+                updateStatus('connected', '认证连接成功');
+            });
+
+            socket.on('disconnect', () => {
+                log('❌ Socket连接断开');
+                updateStatus('error', '连接断开');
+            });
+
+            socket.on('connect_error', (error) => {
+                log(`❌ 认证连接错误: ${error.message}`);
+                updateStatus('error', `认证失败: ${error.message}`);
+            });
+
+            // 监听所有可能的事件
+            socket.on('userJoined', (data) => {
+                log(`📥 用户加入: ${JSON.stringify(data)}`);
+            });
+
+            socket.on('userLeft', (data) => {
+                log(`📤 用户离开: ${JSON.stringify(data)}`);
+            });
+
+            socket.on('message', (data) => {
+                log(`💬 收到消息: ${JSON.stringify(data)}`);
+            });
+
+            socket.on('usersList', (data) => {
+                log(`👥 用户列表更新: ${JSON.stringify(data)}`);
+            });
+        }
+
+        function sendTestMessage() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket未连接');
+                return;
+            }
+
+            const message = document.getElementById('message').value;
+            if (!message) {
+                log('❌ 请输入测试消息');
+                return;
+            }
+
+            log(`发送测试消息: ${message}`);
+            socket.emit('send_message', { message });
+        }
+
+        // 页面加载时的初始化
+        log('调试工具已加载，请按顺序测试：');
+        log('1. 点击"测试连接"检查基础Socket连接');
+        log('2. 点击"测试认证"获取认证Token');
+        log('3. 点击"带认证连接Socket"测试完整流程');
+        log('4. 点击"发送消息"测试消息功能');
+    </script>
+</body>
+</html>

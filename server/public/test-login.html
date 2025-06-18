@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录连接测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .status.warning { background: #fff3cd; color: #856404; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 5px;
+            width: 200px;
+        }
+        .step {
+            border-left: 4px solid #007bff;
+            padding-left: 15px;
+            margin: 10px 0;
+        }
+        .token-display {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            word-break: break-all;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 登录连接问题诊断工具</h1>
+    
+    <div class="test-panel">
+        <h3>步骤1: 用户登录测试</h3>
+        <div class="step">
+            <input type="text" id="username" placeholder="用户名" value="testuser">
+            <input type="password" id="password" placeholder="密码" value="123456">
+            <button onclick="testLogin()">测试登录</button>
+            <button onclick="clearLogs()">清空日志</button>
+        </div>
+        <div id="loginStatus" class="status warning">等待登录测试</div>
+        <div class="token-display" id="tokenDisplay">Token: 未获取</div>
+    </div>
+
+    <div class="test-panel">
+        <h3>步骤2: Token验证测试</h3>
+        <div class="step">
+            <button onclick="testTokenVerify()" id="verifyBtn" disabled>验证Token</button>
+            <button onclick="testTokenManual()">手动验证Token</button>
+        </div>
+        <div id="verifyStatus" class="status warning">等待Token验证</div>
+    </div>
+
+    <div class="test-panel">
+        <h3>步骤3: Socket连接测试</h3>
+        <div class="step">
+            <button onclick="testSocketConnection()" id="socketBtn" disabled>测试Socket连接</button>
+            <button onclick="disconnectSocket()">断开连接</button>
+        </div>
+        <div id="socketStatus" class="status warning">等待Socket连接测试</div>
+    </div>
+
+    <div class="test-panel">
+        <h3>步骤4: 消息发送测试</h3>
+        <div class="step">
+            <input type="text" id="testMessage" placeholder="测试消息" value="Hello from test page">
+            <button onclick="sendTestMessage()" id="messageBtn" disabled>发送消息</button>
+        </div>
+        <div id="messageStatus" class="status warning">等待消息测试</div>
+    </div>
+
+    <div class="test-panel">
+        <h3>详细日志</h3>
+        <div id="logs" class="log">等待操作...
+</div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let socket = null;
+        let authToken = null;
+        let currentUser = null;
+        const logsEl = document.getElementById('logs');
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const prefix = type === 'error' ? '❌' : type === 'success' ? '✅' : type === 'warning' ? '⚠️' : 'ℹ️';
+            logsEl.textContent += `[${timestamp}] ${prefix} ${message}\n`;
+            logsEl.scrollTop = logsEl.scrollHeight;
+            console.log(`${prefix} ${message}`);
+        }
+
+        function updateStatus(elementId, status, message) {
+            const el = document.getElementById(elementId);
+            el.className = `status ${status}`;
+            el.textContent = message;
+        }
+
+        function updateTokenDisplay() {
+            const tokenEl = document.getElementById('tokenDisplay');
+            if (authToken) {
+                tokenEl.textContent = `Token: ${authToken.substring(0, 50)}...`;
+                document.getElementById('verifyBtn').disabled = false;
+                document.getElementById('socketBtn').disabled = false;
+            } else {
+                tokenEl.textContent = 'Token: 未获取';
+                document.getElementById('verifyBtn').disabled = true;
+                document.getElementById('socketBtn').disabled = true;
+            }
+        }
+
+        function clearLogs() {
+            logsEl.textContent = '日志已清空\n';
+        }
+
+        async function testLogin() {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            if (!username || !password) {
+                log('请输入用户名和密码', 'error');
+                updateStatus('loginStatus', 'error', '登录失败：缺少用户名或密码');
+                return;
+            }
+
+            log(`开始登录测试: ${username}`);
+            updateStatus('loginStatus', 'warning', '登录中...');
+
+            try {
+                // 先尝试注册（如果用户不存在）
+                log('尝试注册用户（如果不存在）...');
+                const registerResponse = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        username, 
+                        password, 
+                        email: `${username}@test.com` 
+                    })
+                });
+                
+                const registerData = await registerResponse.json();
+                log(`注册响应: ${JSON.stringify(registerData)}`);
+
+                // 执行登录
+                log('执行登录请求...');
+                const loginResponse = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const loginData = await loginResponse.json();
+                log(`登录响应状态: ${loginResponse.status}`);
+                log(`登录响应数据: ${JSON.stringify(loginData)}`);
+
+                if (loginResponse.ok && loginData.success && loginData.data && loginData.data.token) {
+                    authToken = loginData.data.token;
+                    currentUser = loginData.data.user;
+                    
+                    log(`登录成功！用户: ${currentUser.username}`, 'success');
+                    log(`Token获取成功: ${authToken.substring(0, 30)}...`, 'success');
+                    
+                    updateStatus('loginStatus', 'success', '登录成功');
+                    updateTokenDisplay();
+                    
+                    // 保存到localStorage
+                    localStorage.setItem('authToken', authToken);
+                    log('Token已保存到localStorage', 'success');
+                    
+                } else {
+                    log(`登录失败: ${loginData.message || '未知错误'}`, 'error');
+                    updateStatus('loginStatus', 'error', `登录失败: ${loginData.message || '未知错误'}`);
+                }
+            } catch (error) {
+                log(`登录请求错误: ${error.message}`, 'error');
+                updateStatus('loginStatus', 'error', `网络错误: ${error.message}`);
+            }
+        }
+
+        async function testTokenVerify() {
+            if (!authToken) {
+                log('没有Token可验证', 'error');
+                return;
+            }
+
+            log('开始验证Token...');
+            updateStatus('verifyStatus', 'warning', '验证中...');
+
+            try {
+                const response = await fetch('/api/auth/verify', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                const data = await response.json();
+                log(`Token验证响应状态: ${response.status}`);
+                log(`Token验证响应: ${JSON.stringify(data)}`);
+
+                if (response.ok && data.success) {
+                    log('Token验证成功', 'success');
+                    updateStatus('verifyStatus', 'success', 'Token有效');
+                    document.getElementById('messageBtn').disabled = false;
+                } else {
+                    log(`Token验证失败: ${data.message}`, 'error');
+                    updateStatus('verifyStatus', 'error', `Token无效: ${data.message}`);
+                }
+            } catch (error) {
+                log(`Token验证错误: ${error.message}`, 'error');
+                updateStatus('verifyStatus', 'error', `验证错误: ${error.message}`);
+            }
+        }
+
+        async function testTokenManual() {
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                authToken = token;
+                log(`从localStorage获取Token: ${token.substring(0, 30)}...`, 'success');
+                updateTokenDisplay();
+            } else {
+                log('localStorage中没有Token', 'warning');
+            }
+        }
+
+        function testSocketConnection() {
+            if (!authToken) {
+                log('没有Token，无法建立认证连接', 'error');
+                return;
+            }
+
+            log('开始Socket连接测试...');
+            updateStatus('socketStatus', 'warning', '连接中...');
+
+            if (socket) {
+                socket.disconnect();
+                log('断开现有Socket连接');
+            }
+
+            log(`使用Token连接: ${authToken.substring(0, 30)}...`);
+            
+            socket = io({
+                auth: {
+                    token: authToken
+                }
+            });
+
+            socket.on('connect', () => {
+                log('Socket连接成功！', 'success');
+                updateStatus('socketStatus', 'success', 'Socket已连接');
+                document.getElementById('messageBtn').disabled = false;
+            });
+
+            socket.on('disconnect', () => {
+                log('Socket连接断开', 'warning');
+                updateStatus('socketStatus', 'warning', 'Socket已断开');
+                document.getElementById('messageBtn').disabled = true;
+            });
+
+            socket.on('connect_error', (error) => {
+                log(`Socket连接错误: ${error.message}`, 'error');
+                updateStatus('socketStatus', 'error', `连接失败: ${error.message}`);
+            });
+
+            // 监听所有Socket事件
+            socket.on('userJoined', (data) => {
+                log(`用户加入: ${JSON.stringify(data)}`, 'success');
+            });
+
+            socket.on('userLeft', (data) => {
+                log(`用户离开: ${JSON.stringify(data)}`, 'warning');
+            });
+
+            socket.on('message', (data) => {
+                log(`收到消息: ${JSON.stringify(data)}`, 'success');
+            });
+
+            socket.on('usersList', (data) => {
+                log(`用户列表更新: ${JSON.stringify(data)}`);
+            });
+
+            socket.on('error', (error) => {
+                log(`Socket错误: ${error}`, 'error');
+            });
+        }
+
+        function disconnectSocket() {
+            if (socket) {
+                socket.disconnect();
+                log('手动断开Socket连接');
+            }
+        }
+
+        function sendTestMessage() {
+            if (!socket || !socket.connected) {
+                log('Socket未连接，无法发送消息', 'error');
+                updateStatus('messageStatus', 'error', 'Socket未连接');
+                return;
+            }
+
+            const message = document.getElementById('testMessage').value.trim();
+            if (!message) {
+                log('请输入测试消息', 'error');
+                return;
+            }
+
+            log(`发送测试消息: ${message}`);
+            updateStatus('messageStatus', 'warning', '发送中...');
+            
+            socket.emit('send_message', { message });
+            
+            // 设置超时检查
+            setTimeout(() => {
+                updateStatus('messageStatus', 'success', '消息已发送');
+            }, 1000);
+        }
+
+        // 页面加载时的初始化
+        log('登录连接诊断工具已加载');
+        log('请按顺序执行测试：');
+        log('1. 输入用户名密码，点击"测试登录"');
+        log('2. 登录成功后，点击"验证Token"');
+        log('3. Token验证通过后，点击"测试Socket连接"');
+        log('4. Socket连接成功后，点击"发送消息"测试完整功能');
+        
+        // 检查是否有保存的Token
+        const savedToken = localStorage.getItem('authToken');
+        if (savedToken) {
+            log(`发现保存的Token: ${savedToken.substring(0, 30)}...`, 'warning');
+            log('可以点击"手动验证Token"来使用保存的Token');
+        }
+    </script>
+</body>
+</html>
