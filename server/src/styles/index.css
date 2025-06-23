@@ -635,6 +635,36 @@ body {
   height: 20px;
 }
 
+/* 文件上传按钮样式 */
+.file-btn {
+  background: #f8f9fa;
+  border: 1px solid #e1e5e9;
+  border-radius: 8px;
+  padding: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+}
+
+.file-btn:hover:not(:disabled) {
+  background: #e9ecef;
+  border-color: #d1d5db;
+  color: #333;
+}
+
+.file-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.file-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
 /* 图片模态视图样式 */
 .image-modal {
   position: fixed;
@@ -710,6 +740,69 @@ body {
   display: block;
 }
 
+/* 文件消息样式 */
+.message-file-container {
+  max-width: 100%;
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  background: #f8f9fa;
+  border: 1px solid #e1e5e9;
+  border-radius: 12px;
+  padding: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 0.5rem;
+  max-width: 350px;
+}
+
+.file-info:hover {
+  background: #e9ecef;
+  border-color: #d1d5db;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.file-icon {
+  margin-right: 0.75rem;
+  color: #667eea;
+  flex-shrink: 0;
+}
+
+.file-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-name {
+  font-weight: 500;
+  color: #333;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 0.25rem;
+}
+
+.file-size {
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.download-icon {
+  margin-left: 0.75rem;
+  color: #667eea;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.file-info:hover .download-icon {
+  opacity: 1;
+}
+
 /* 移动端适配 */
 @media (max-width: 768px) {
   .image-modal-content {
@@ -723,5 +816,14 @@ body {
     width: 28px;
     height: 28px;
     font-size: 16px;
+  }
+  
+  .file-info {
+    max-width: 100%;
+    padding: 0.75rem;
+  }
+  
+  .file-name {
+    font-size: 0.85rem;
   }
 }

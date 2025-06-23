@@ -51,6 +51,8 @@ function ChatScreen({ currentUser, socket, onLogout }) {
     if (socket) {
       if (messageData.type === 'image') {
         socket.emit('send_message', messageData);
+      } else if (messageData.type === 'file') {
+        socket.emit('send_message', messageData);
       } else if (messageData.message && messageData.message.trim()) {
         socket.emit('send_message', messageData);
       }

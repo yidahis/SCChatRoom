@@ -76,24 +76,24 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// 配置multer用于图片上传
+// 配置multer用于文件上传
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, uploadsDir);
   },
   filename: function (req, file, cb) {
-    // 生成唯一文件名
+    // 生成唯一文件名，保留原始文件名
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     const ext = path.extname(file.originalname);
-    cb(null, 'image-' + uniqueSuffix + ext);
+    const baseName = path.basename(file.originalname, ext);
+    cb(null, baseName + '-' + uniqueSuffix + ext);
   }
 });
 
-const upload = multer({
+// 图片上传配置
+const imageUpload = multer({
   storage: storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB限制
-  },
+
   fileFilter: function (req, file, cb) {
     // 只允许图片文件
     if (file.mimetype.startsWith('image/')) {
@@ -104,8 +104,54 @@ const upload = multer({
   }
 });
 
+// 通用文件上传配置
+const fileUpload = multer({
+  storage: storage,
+  fileFilter: function (req, file, cb) {
+    // 检查文件类型安全性
+    const allowedTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'text/plain',
+      'text/csv',
+      'application/zip',
+      'application/x-zip-compressed',
+      'application/json',
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+      'audio/mpeg',
+      'audio/wav',
+      'video/mp4',
+      'video/avi',
+      'video/quicktime'
+    ];
+    
+    // 检查危险文件扩展名
+    const dangerousExts = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.com', '.jar', '.js', '.vbs', '.ps1'];
+    const fileExt = path.extname(file.originalname).toLowerCase();
+    
+    if (dangerousExts.includes(fileExt)) {
+      cb(new Error('不允许上传可执行文件'));
+      return;
+    }
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('不支持的文件类型'));
+    }
+  }
+});
+
 // 图片上传路由
-app.post('/api/upload/image', authenticateToken, upload.single('image'), (req, res) => {
+app.post('/api/upload/image', authenticateToken, imageUpload.single('image'), (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: '没有上传文件' });
@@ -120,6 +166,56 @@ app.post('/api/upload/image', authenticateToken, upload.single('image'), (req, r
   } catch (error) {
     console.error('图片上传错误:', error);
     res.status(500).json({ error: '图片上传失败' });
+  }
+});
+
+// 通用文件上传路由
+app.post('/api/upload/file', authenticateToken, fileUpload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: '没有上传文件' });
+    }
+
+    const fileUrl = `/uploads/${req.file.filename}`;
+    res.json({
+      success: true,
+      fileUrl: fileUrl,
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      size: req.file.size,
+      mimetype: req.file.mimetype
+    });
+  } catch (error) {
+    console.error('文件上传错误:', error);
+    res.status(500).json({ error: '文件上传失败' });
+  }
+});
+
+// 文件下载路由
+app.get('/api/download/:filename', authenticateToken, (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const filePath = path.join(uploadsDir, filename);
+    
+    // 检查文件是否存在
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: '文件不存在' });
+    }
+    
+    // 获取文件信息
+    const stats = fs.statSync(filePath);
+    
+    // 设置响应头
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', stats.size);
+    
+    // 创建文件流并发送
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+    
+  } catch (error) {
+    console.error('文件下载错误:', error);
+    res.status(500).json({ error: '文件下载失败' });
   }
 });
 
@@ -289,6 +385,11 @@ io.on('connection', async (socket) => {
           socket.emit('error', '图片URL不能为空');
           return;
         }
+      } else if (data.type === 'file') {
+        if (!data.fileUrl || !data.filename) {
+          socket.emit('error', '文件信息不完整');
+          return;
+        }
       } else {
         if (!data.message || data.message.trim() === '') {
           socket.emit('error', '消息不能为空');
@@ -316,6 +417,13 @@ io.on('connection', async (socket) => {
       if (data.type === 'image') {
         messageData.imageUrl = data.imageUrl;
         messageData.content = data.message || ''; // 可选的图片描述
+      } else if (data.type === 'file') {
+        messageData.fileUrl = data.fileUrl;
+        messageData.filename = data.filename;
+        messageData.originalName = data.originalName;
+        messageData.size = data.size;
+        messageData.mimetype = data.mimetype;
+        messageData.content = data.message || ''; // 可选的文件描述
       } else {
         messageData.content = data.message.trim();
       }
@@ -325,6 +433,8 @@ io.on('connection', async (socket) => {
       
       if (data.type === 'image') {
         console.log(`[全局聊天室] ${userInfo.username} 发送了图片: ${data.imageUrl}`);
+      } else if (data.type === 'file') {
+        console.log(`[全局聊天室] ${userInfo.username} 发送了文件: ${data.originalName || data.filename}`);
       } else {
         console.log(`[全局聊天室] ${userInfo.username}: ${data.message.trim()}`);
       }
