@@ -37,9 +37,10 @@ connectDB().then(() => {
     console.error('数据库连接失败，但应用将继续运行:', err.message);
 });
 
-// 中间件配置
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// 中间件配置 - 支持大文件上传
+console.log('⚙️ [后端] 配置Express中间件 - 请求体大小限制: 5GB');
+app.use(express.json({ limit: '5gb' }));
+app.use(express.urlencoded({ extended: true, limit: '5gb' }));
 
 // 配置会话中间件（仅在MongoDB可用时使用MongoStore）
 const sessionConfig = {
@@ -107,46 +108,28 @@ const imageUpload = multer({
 // 通用文件上传配置
 const fileUpload = multer({
   storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 * 1024 // 5GB限制
+  },
   fileFilter: function (req, file, cb) {
-    // 检查文件类型安全性
-    const allowedTypes = [
-      'application/pdf',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-powerpoint',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'text/plain',
-      'text/csv',
-      'application/zip',
-      'application/x-zip-compressed',
-      'application/json',
-      'image/jpeg',
-      'image/png',
-      'image/gif',
-      'image/webp',
-      'audio/mpeg',
-      'audio/wav',
-      'video/mp4',
-      'video/avi',
-      'video/quicktime'
-    ];
+    console.log('🔍 [后端] 检查文件类型:', {
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+      fieldname: file.fieldname
+    });
     
-    // 检查危险文件扩展名
+    // 只检查危险文件扩展名，允许所有其他文件类型
     const dangerousExts = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.com', '.jar', '.js', '.vbs', '.ps1'];
     const fileExt = path.extname(file.originalname).toLowerCase();
     
     if (dangerousExts.includes(fileExt)) {
+      console.error('❌ [后端] 危险文件类型被拒绝:', fileExt);
       cb(new Error('不允许上传可执行文件'));
       return;
     }
     
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('不支持的文件类型'));
-    }
+    console.log('✅ [后端] 文件类型检查通过');
+    cb(null, true);
   }
 });
 
@@ -170,54 +153,203 @@ app.post('/api/upload/image', authenticateToken, imageUpload.single('image'), (r
 });
 
 // 通用文件上传路由
-app.post('/api/upload/file', authenticateToken, fileUpload.single('file'), (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: '没有上传文件' });
+app.post('/api/upload/file', authenticateToken, (req, res) => {
+  console.log('🔄 [后端] 收到文件上传请求:', {
+    method: req.method,
+    url: req.url,
+    headers: {
+      'content-type': req.headers['content-type'],
+      'content-length': req.headers['content-length'],
+      'authorization': req.headers['authorization'] ? '已提供' : '未提供'
+    },
+    user: req.user ? req.user.username : '未知用户'
+  });
+
+  fileUpload.single('file')(req, res, (err) => {
+    if (err) {
+      console.error('❌ [后端] Multer处理错误:', {
+        name: err.name,
+        message: err.message,
+        code: err.code,
+        field: err.field,
+        stack: err.stack
+      });
+      return res.status(400).json({ error: `文件上传处理失败: ${err.message}` });
     }
 
-    const fileUrl = `/uploads/${req.file.filename}`;
-    res.json({
-      success: true,
-      fileUrl: fileUrl,
-      filename: req.file.filename,
-      originalName: req.file.originalname,
-      size: req.file.size,
-      mimetype: req.file.mimetype
-    });
-  } catch (error) {
-    console.error('文件上传错误:', error);
-    res.status(500).json({ error: '文件上传失败' });
-  }
+    try {
+      console.log('📦 [后端] Multer处理完成，检查文件...');
+      
+      if (!req.file) {
+        console.error('❌ [后端] 没有接收到文件');
+        return res.status(400).json({ error: '没有上传文件' });
+      }
+
+      console.log('✅ [后端] 文件接收成功:', {
+        originalname: req.file.originalname,
+        filename: req.file.filename,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        sizeMB: (req.file.size / 1024 / 1024).toFixed(2) + 'MB',
+        destination: req.file.destination,
+        path: req.file.path
+      });
+
+      const fileUrl = `/uploads/${req.file.filename}`;
+      const responseData = {
+        success: true,
+        fileUrl: fileUrl,
+        filename: req.file.filename,
+        originalName: req.file.originalname,
+        size: req.file.size,
+        mimetype: req.file.mimetype
+      };
+
+      console.log('🎉 [后端] 文件上传成功，返回响应:', responseData);
+      res.json(responseData);
+      
+    } catch (error) {
+      console.error('💥 [后端] 文件上传处理异常:', {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      });
+      res.status(500).json({ error: `文件上传失败: ${error.message}` });
+    }
+  });
 });
 
 // 文件下载路由
 app.get('/api/download/:filename', authenticateToken, (req, res) => {
+  const startTime = Date.now();
+  const requestId = Math.random().toString(36).substr(2, 9);
+  
   try {
     const filename = req.params.filename;
     const filePath = path.join(uploadsDir, filename);
+    const userInfo = req.user ? { id: req.user.id, username: req.user.username } : 'Unknown';
+    
+    console.log(`🔽 [后端] 文件下载请求开始 [${requestId}]:`, {
+      filename,
+      filePath,
+      user: userInfo,
+      userAgent: req.get('User-Agent'),
+      ip: req.ip || req.connection.remoteAddress,
+      timestamp: new Date().toISOString()
+    });
     
     // 检查文件是否存在
     if (!fs.existsSync(filePath)) {
+      console.error(`❌ [后端] 文件不存在 [${requestId}]:`, {
+        filename,
+        filePath,
+        user: userInfo
+      });
       return res.status(404).json({ error: '文件不存在' });
     }
     
     // 获取文件信息
     const stats = fs.statSync(filePath);
+    console.log(`📊 [后端] 文件信息 [${requestId}]:`, {
+      filename,
+      size: stats.size,
+      sizeFormatted: formatFileSize(stats.size),
+      created: stats.birthtime,
+      modified: stats.mtime,
+      isFile: stats.isFile()
+    });
     
     // 设置响应头
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', stats.size);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    
+    console.log(`📤 [后端] 开始发送文件 [${requestId}]:`, {
+      filename,
+      contentLength: stats.size,
+      headers: {
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': stats.size,
+        'Content-Type': 'application/octet-stream'
+      }
+    });
     
     // 创建文件流并发送
     const fileStream = fs.createReadStream(filePath);
+    
+    // 监听流事件
+    let bytesTransferred = 0;
+    
+    fileStream.on('data', (chunk) => {
+      bytesTransferred += chunk.length;
+      // 每传输10%记录一次进度（避免日志过多）
+      const progress = (bytesTransferred / stats.size) * 100;
+      if (progress % 10 < (chunk.length / stats.size) * 100) {
+        console.log(`📈 [后端] 下载进度 [${requestId}]: ${progress.toFixed(1)}% (${formatFileSize(bytesTransferred)}/${formatFileSize(stats.size)})`);
+      }
+    });
+    
+    fileStream.on('end', () => {
+      const duration = Date.now() - startTime;
+      const speed = stats.size / (duration / 1000); // bytes per second
+      console.log(`✅ [后端] 文件下载完成 [${requestId}]:`, {
+        filename,
+        totalSize: formatFileSize(stats.size),
+        duration: `${duration}ms`,
+        averageSpeed: formatFileSize(speed) + '/s',
+        user: userInfo
+      });
+    });
+    
+    fileStream.on('error', (streamError) => {
+      const duration = Date.now() - startTime;
+      console.error(`💥 [后端] 文件流错误 [${requestId}]:`, {
+        filename,
+        error: streamError.message,
+        bytesTransferred: formatFileSize(bytesTransferred),
+        duration: `${duration}ms`,
+        user: userInfo
+      });
+    });
+    
+    // 监听响应关闭事件
+    res.on('close', () => {
+      const duration = Date.now() - startTime;
+      if (bytesTransferred < stats.size) {
+        console.warn(`⚠️ [后端] 下载中断 [${requestId}]:`, {
+          filename,
+          bytesTransferred: formatFileSize(bytesTransferred),
+          totalSize: formatFileSize(stats.size),
+          progress: `${((bytesTransferred / stats.size) * 100).toFixed(1)}%`,
+          duration: `${duration}ms`,
+          user: userInfo
+        });
+      }
+    });
+    
     fileStream.pipe(res);
     
   } catch (error) {
-    console.error('文件下载错误:', error);
+    const duration = Date.now() - startTime;
+    console.error(`💥 [后端] 文件下载错误 [${requestId}]:`, {
+      filename: req.params.filename,
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`,
+      user: req.user ? { id: req.user.id, username: req.user.username } : 'Unknown'
+    });
     res.status(500).json({ error: '文件下载失败' });
   }
 });
+
+// 文件大小格式化函数
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
 
 // 静态文件服务
 app.use(express.static(path.join(__dirname, 'public')));
@@ -506,6 +638,46 @@ io.on('connection', async (socket) => {
   // 处理错误
   socket.on('error', (error) => {
     console.error('Socket错误:', error);
+  });
+});
+
+// 全局错误处理中间件
+app.use((err, req, res, next) => {
+  console.error('🚨 [后端] 全局错误处理:', {
+    name: err.name,
+    message: err.message,
+    code: err.code,
+    status: err.status,
+    type: err.type,
+    url: req.url,
+    method: req.method,
+    headers: {
+      'content-type': req.headers['content-type'],
+      'content-length': req.headers['content-length']
+    },
+    stack: err.stack
+  });
+
+  // 处理请求体过大错误
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ 
+      error: '请求体过大，文件可能超出服务器限制',
+      details: err.message 
+    });
+  }
+
+  // 处理Multer错误
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ 
+      error: '文件大小超出限制',
+      details: err.message 
+    });
+  }
+
+  // 处理其他错误
+  res.status(err.status || 500).json({ 
+    error: err.message || '服务器内部错误',
+    details: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });
 });
 

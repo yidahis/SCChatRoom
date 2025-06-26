@@ -82,21 +82,57 @@ function MessageInput({ onSendMessage }) {
     const file = e.target.files[0];
     if (!file) return;
 
-    // 文件大小验证已移除，允许上传任意大小的文件
+    // 详细日志：文件信息
+    console.log('🔄 开始文件上传:', {
+      fileName: file.name,
+      fileSize: file.size,
+      fileSizeMB: (file.size / 1024 / 1024).toFixed(2) + 'MB',
+      fileType: file.type,
+      lastModified: new Date(file.lastModified).toISOString()
+    });
+
+    // 检查文件大小限制（5GB）
+    const maxSize = 5 * 1024 * 1024 * 1024; // 5GB
+    if (file.size > maxSize) {
+      console.error('❌ 文件过大:', {
+        fileSize: file.size,
+        maxSize: maxSize,
+        fileSizeMB: (file.size / 1024 / 1024).toFixed(2) + 'MB'
+      });
+      alert(`文件大小超出限制！最大支持5GB，当前文件大小：${(file.size / 1024 / 1024).toFixed(2)}MB`);
+      return;
+    }
+
+    // 检查危险文件扩展名
+    const dangerousExts = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.com', '.jar', '.js', '.vbs', '.ps1'];
+    const fileExt = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+    if (dangerousExts.includes(fileExt)) {
+      console.error('❌ 危险文件类型被拒绝:', fileExt);
+      alert('不允许上传可执行文件！');
+      return;
+    }
+
+    console.log('✅ 前端文件检查通过');
 
     // 获取token
     const token = localStorage.getItem('token');
     if (!token) {
+      console.error('❌ 上传失败: 未找到认证token');
       alert('请先登录');
       return;
     }
 
     setIsUploading(true);
+    console.log('📤 开始上传请求...');
 
     try {
       const formData = new FormData();
       formData.append('file', file);
+      console.log('📦 FormData已创建，文件已添加');
 
+      console.log('🌐 发送上传请求到 /api/upload/file');
+      const startTime = Date.now();
+      
       const response = await fetch('/api/upload/file', {
         method: 'POST',
         headers: {
@@ -105,9 +141,33 @@ function MessageInput({ onSendMessage }) {
         body: formData
       });
 
+      const endTime = Date.now();
+      const uploadTime = ((endTime - startTime) / 1000).toFixed(2);
+      console.log(`⏱️ 上传请求完成，耗时: ${uploadTime}秒`);
+      console.log('📡 响应状态:', response.status, response.statusText);
+
+      if (!response.ok) {
+        console.error('❌ HTTP响应错误:', {
+          status: response.status,
+          statusText: response.statusText,
+          url: response.url
+        });
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      console.log('📄 解析响应JSON...');
       const result = await response.json();
+      console.log('✅ 服务器响应:', result);
 
       if (result.success) {
+        console.log('🎉 文件上传成功!', {
+          fileUrl: result.fileUrl,
+          filename: result.filename,
+          originalName: result.originalName,
+          size: result.size,
+          mimetype: result.mimetype
+        });
+        
         // 发送文件消息
         onSendMessage({
           type: 'file',
@@ -119,13 +179,19 @@ function MessageInput({ onSendMessage }) {
           message: '' // 可以添加文件描述
         });
       } else {
+        console.error('❌ 服务器返回失败:', result.error);
         alert(result.error || '文件上传失败');
       }
     } catch (error) {
-      console.error('文件上传错误:', error);
-      alert('文件上传失败');
+      console.error('💥 文件上传异常:', {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      });
+      alert(`文件上传失败: ${error.message}`);
     } finally {
       setIsUploading(false);
+      console.log('🔚 文件上传流程结束');
       // 清空文件输入
       if (generalFileInputRef.current) {
         generalFileInputRef.current.value = '';

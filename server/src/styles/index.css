@@ -803,6 +803,25 @@ body {
   opacity: 1;
 }
 
+.download-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.loading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* 移动端适配 */
 @media (max-width: 768px) {
   .image-modal-content {

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 
 function MessageList({ messages, currentUser }) {
   const [modalImage, setModalImage] = useState(null);
+  const [downloadingFiles, setDownloadingFiles] = useState(new Set());
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -54,12 +55,26 @@ function MessageList({ messages, currentUser }) {
   };
 
   const handleFileDownload = async (filename, originalName) => {
+    // 防止重复下载
+    if (downloadingFiles.has(filename)) {
+      return;
+    }
+
     try {
+      // 设置下载状态
+      setDownloadingFiles(prev => new Set(prev).add(filename));
+      
       const token = localStorage.getItem('token');
       if (!token) {
         alert('请先登录');
         return;
       }
+
+      console.log('🔽 [前端] 开始下载文件:', {
+        filename,
+        originalName,
+        timestamp: new Date().toISOString()
+      });
 
       const response = await fetch(`/api/download/${filename}`, {
         headers: {
@@ -67,8 +82,24 @@ function MessageList({ messages, currentUser }) {
         }
       });
 
+      console.log('📡 [前端] 下载响应状态:', {
+        status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries())
+      });
+
       if (response.ok) {
+        const contentLength = response.headers.get('content-length');
+        console.log('📦 [前端] 开始处理文件数据:', {
+          contentLength: contentLength ? `${contentLength} bytes` : '未知大小'
+        });
+        
         const blob = await response.blob();
+        console.log('✅ [前端] 文件数据处理完成:', {
+          blobSize: blob.size,
+          blobType: blob.type
+        });
+        
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.style.display = 'none';
@@ -78,12 +109,25 @@ function MessageList({ messages, currentUser }) {
         a.click();
         window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
+        
+        console.log('🎉 [前端] 文件下载成功:', originalName || filename);
       } else {
+        console.error('❌ [前端] 下载失败:', {
+          status: response.status,
+          statusText: response.statusText
+        });
         alert('文件下载失败');
       }
     } catch (error) {
-      console.error('下载错误:', error);
+      console.error('💥 [前端] 下载错误:', error);
       alert('文件下载失败');
+    } finally {
+      // 清除下载状态
+      setDownloadingFiles(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(filename);
+        return newSet;
+      });
     }
   };
   const formatTime = (timestamp) => {
@@ -152,11 +196,22 @@ function MessageList({ messages, currentUser }) {
                           <div className="file-size">{formatFileSize(message.size)}</div>
                         </div>
                         <div className="download-icon">
-                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2"/>
-                            <polyline points="7,10 12,15 17,10" stroke="currentColor" strokeWidth="2"/>
-                            <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" strokeWidth="2"/>
-                          </svg>
+                          {downloadingFiles.has(message.filename) ? (
+                            <div className="download-loading">
+                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="loading-spinner">
+                                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="31.416" strokeDashoffset="31.416">
+                                  <animate attributeName="stroke-dasharray" dur="2s" values="0 31.416;15.708 15.708;0 31.416" repeatCount="indefinite"/>
+                                  <animate attributeName="stroke-dashoffset" dur="2s" values="0;-15.708;-31.416" repeatCount="indefinite"/>
+                                </circle>
+                              </svg>
+                            </div>
+                          ) : (
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2"/>
+                              <polyline points="7,10 12,15 17,10" stroke="currentColor" strokeWidth="2"/>
+                              <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" strokeWidth="2"/>
+                            </svg>
+                          )}
                         </div>
                       </div>
                       {message.content && (
