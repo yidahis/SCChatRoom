@@ -3,8 +3,49 @@ import React, { useState, useRef } from 'react';
 function MessageInput({ onSendMessage }) {
   const [message, setMessage] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadSpeed, setUploadSpeed] = useState(0);
+  const [remainingTime, setRemainingTime] = useState(0);
+  const [uploadedBytes, setUploadedBytes] = useState(0);
+  const [totalBytes, setTotalBytes] = useState(0);
+  const [uploadQueue, setUploadQueue] = useState([]);
+  const [currentUploadIndex, setCurrentUploadIndex] = useState(0);
+  const [uploadResults, setUploadResults] = useState([]);
   const fileInputRef = useRef(null);
   const generalFileInputRef = useRef(null);
+  const uploadStartTimeRef = useRef(null);
+
+  // 格式化文件大小
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
+  // 格式化速度
+  const formatSpeed = (bytesPerSecond) => {
+    return formatFileSize(bytesPerSecond) + '/s';
+  };
+
+  // 格式化时间
+  const formatTime = (seconds) => {
+    if (seconds < 60) return `${Math.round(seconds)}秒`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = Math.round(seconds % 60);
+    return `${minutes}分${remainingSeconds}秒`;
+  };
+
+  // 重置上传状态
+  const resetUploadState = () => {
+    setUploadProgress(0);
+    setUploadSpeed(0);
+    setRemainingTime(0);
+    setUploadedBytes(0);
+    setTotalBytes(0);
+    uploadStartTimeRef.current = null;
+  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -22,16 +63,22 @@ function MessageInput({ onSendMessage }) {
   };
 
   const handleImageUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
 
-    // 验证文件类型
-    if (!file.type.startsWith('image/')) {
-      alert('请选择图片文件');
+    // 验证所有文件类型
+    const invalidFiles = files.filter(file => !file.type.startsWith('image/'));
+    if (invalidFiles.length > 0) {
+      alert(`以下文件不是图片格式：${invalidFiles.map(f => f.name).join(', ')}`);
       return;
     }
 
-    // 图片大小验证已移除，允许上传任意大小的图片
+    // 检查文件大小 (5MB)
+    const oversizedFiles = files.filter(file => file.size > 5 * 1024 * 1024);
+    if (oversizedFiles.length > 0) {
+      alert(`以下图片文件大小超过5MB：${oversizedFiles.map(f => f.name).join(', ')}`);
+      return;
+    }
 
     // 获取token
     const token = localStorage.getItem('token');
@@ -40,163 +87,184 @@ function MessageInput({ onSendMessage }) {
       return;
     }
 
-    setIsUploading(true);
-
-    try {
-      const formData = new FormData();
-      formData.append('image', file);
-
-      const response = await fetch('/api/upload/image', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      const result = await response.json();
-
-      if (result.success) {
-        // 发送图片消息
-        onSendMessage({
-          type: 'image',
-          imageUrl: result.imageUrl,
-          message: '' // 可以添加图片描述
-        });
-      } else {
-        alert(result.error || '图片上传失败');
-      }
-    } catch (error) {
-      console.error('图片上传错误:', error);
-      alert('图片上传失败');
-    } finally {
-      setIsUploading(false);
-      // 清空文件输入
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    }
-  };
+    await uploadMultipleFiles(files, 'image', token);
+    
+    // 清空文件输入
+     if (fileInputRef.current) {
+       fileInputRef.current.value = '';
+     }
+   };
 
   const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    // 详细日志：文件信息
-    console.log('🔄 开始文件上传:', {
-      fileName: file.name,
-      fileSize: file.size,
-      fileSizeMB: (file.size / 1024 / 1024).toFixed(2) + 'MB',
-      fileType: file.type,
-      lastModified: new Date(file.lastModified).toISOString()
-    });
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
 
     // 检查文件大小限制（5GB）
     const maxSize = 5 * 1024 * 1024 * 1024; // 5GB
-    if (file.size > maxSize) {
-      console.error('❌ 文件过大:', {
-        fileSize: file.size,
-        maxSize: maxSize,
-        fileSizeMB: (file.size / 1024 / 1024).toFixed(2) + 'MB'
-      });
-      alert(`文件大小超出限制！最大支持5GB，当前文件大小：${(file.size / 1024 / 1024).toFixed(2)}MB`);
+    const oversizedFiles = files.filter(file => file.size > maxSize);
+    if (oversizedFiles.length > 0) {
+      alert(`以下文件大小超过5GB限制：${oversizedFiles.map(f => `${f.name} (${(f.size / 1024 / 1024).toFixed(2)}MB)`).join(', ')}`);
       return;
     }
 
     // 检查危险文件扩展名
     const dangerousExts = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.com', '.jar', '.js', '.vbs', '.ps1'];
-    const fileExt = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
-    if (dangerousExts.includes(fileExt)) {
-      console.error('❌ 危险文件类型被拒绝:', fileExt);
-      alert('不允许上传可执行文件！');
+    const dangerousFiles = files.filter(file => {
+      const fileExt = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+      return dangerousExts.includes(fileExt);
+    });
+    if (dangerousFiles.length > 0) {
+      alert(`不允许上传以下可执行文件：${dangerousFiles.map(f => f.name).join(', ')}`);
       return;
     }
-
-    console.log('✅ 前端文件检查通过');
 
     // 获取token
     const token = localStorage.getItem('token');
     if (!token) {
-      console.error('❌ 上传失败: 未找到认证token');
       alert('请先登录');
       return;
     }
 
+    await uploadMultipleFiles(files, 'file', token);
+    
+    // 清空文件输入
+    if (generalFileInputRef.current) {
+      generalFileInputRef.current.value = '';
+    }
+  };
+
+  // 多文件上传函数
+  const uploadMultipleFiles = async (files, type, token) => {
     setIsUploading(true);
-    console.log('📤 开始上传请求...');
-
+    setUploadQueue(files);
+    setCurrentUploadIndex(0);
+    setUploadResults([]);
+    
+    // 先重置状态，再设置总大小
+    resetUploadState();
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+    setTotalBytes(totalSize);
+    uploadStartTimeRef.current = Date.now();
+    
+    let totalUploadedBytes = 0;
+    const results = [];
+    
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      console.log('📦 FormData已创建，文件已添加');
-
-      console.log('🌐 发送上传请求到 /api/upload/file');
-      const startTime = Date.now();
-      
-      const response = await fetch('/api/upload/file', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      const endTime = Date.now();
-      const uploadTime = ((endTime - startTime) / 1000).toFixed(2);
-      console.log(`⏱️ 上传请求完成，耗时: ${uploadTime}秒`);
-      console.log('📡 响应状态:', response.status, response.statusText);
-
-      if (!response.ok) {
-        console.error('❌ HTTP响应错误:', {
-          status: response.status,
-          statusText: response.statusText,
-          url: response.url
-        });
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      console.log('📄 解析响应JSON...');
-      const result = await response.json();
-      console.log('✅ 服务器响应:', result);
-
-      if (result.success) {
-        console.log('🎉 文件上传成功!', {
-          fileUrl: result.fileUrl,
-          filename: result.filename,
-          originalName: result.originalName,
-          size: result.size,
-          mimetype: result.mimetype
-        });
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setCurrentUploadIndex(i);
         
-        // 发送文件消息
-        onSendMessage({
-          type: 'file',
-          fileUrl: result.fileUrl,
-          filename: result.filename,
-          originalName: result.originalName,
-          size: result.size,
-          mimetype: result.mimetype,
-          message: '' // 可以添加文件描述
-        });
-      } else {
-        console.error('❌ 服务器返回失败:', result.error);
-        alert(result.error || '文件上传失败');
+        console.log(`🔄 上传文件 ${i + 1}/${files.length}: ${file.name}`);
+        
+        const result = await uploadSingleFile(file, type, token, totalUploadedBytes, totalSize);
+        results.push(result);
+        totalUploadedBytes += file.size;
+        
+        // 发送消息
+        if (result.success) {
+          if (type === 'image') {
+            onSendMessage({
+              type: 'image',
+              imageUrl: result.imageUrl,
+              message: ''
+            });
+          } else {
+            onSendMessage({
+              type: 'file',
+              fileUrl: result.fileUrl,
+              filename: result.filename,
+              originalName: result.originalName,
+              size: result.size,
+              mimetype: result.mimetype,
+              message: ''
+            });
+          }
+        }
       }
+      
+      setUploadResults(results);
+      
+      // 显示上传结果摘要
+      const successCount = results.filter(r => r.success).length;
+      const failCount = results.length - successCount;
+      
+      if (failCount === 0) {
+        console.log(`✅ 所有文件上传成功 (${successCount}/${results.length})`);
+      } else {
+        alert(`上传完成：${successCount} 个成功，${failCount} 个失败`);
+      }
+      
     } catch (error) {
-      console.error('💥 文件上传异常:', {
-        name: error.name,
-        message: error.message,
-        stack: error.stack
-      });
+      console.error('💥 多文件上传异常:', error);
       alert(`文件上传失败: ${error.message}`);
     } finally {
       setIsUploading(false);
-      console.log('🔚 文件上传流程结束');
-      // 清空文件输入
-      if (generalFileInputRef.current) {
-        generalFileInputRef.current.value = '';
-      }
+      resetUploadState();
+      setUploadQueue([]);
+      setCurrentUploadIndex(0);
     }
+  };
+  
+  // 单文件上传函数
+  const uploadSingleFile = async (file, type, token, previousBytes, totalBytes) => {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      const fieldName = type === 'image' ? 'image' : 'file';
+      const endpoint = type === 'image' ? '/api/upload/image' : '/api/upload/file';
+      
+      formData.append(fieldName, file);
+      
+      const xhr = new XMLHttpRequest();
+      
+      // 监听上传进度
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          const currentFileProgress = (event.loaded / event.total) * 100;
+          const overallProgress = ((previousBytes + event.loaded) / totalBytes) * 100;
+          const currentTime = Date.now();
+          const elapsedTime = (currentTime - uploadStartTimeRef.current) / 1000;
+          
+          setUploadProgress(overallProgress);
+          setUploadedBytes(previousBytes + event.loaded);
+          
+          if (elapsedTime > 0) {
+            const speed = (previousBytes + event.loaded) / elapsedTime;
+            setUploadSpeed(speed);
+            
+            if (speed > 0) {
+              const remaining = (totalBytes - previousBytes - event.loaded) / speed;
+              setRemainingTime(remaining > 0 ? remaining : 0);
+            }
+          }
+        }
+      });
+      
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const result = JSON.parse(xhr.responseText);
+            resolve(result);
+          } catch (e) {
+            resolve({ success: false, error: '响应解析失败', fileName: file.name });
+          }
+        } else {
+          resolve({ success: false, error: `HTTP ${xhr.status}`, fileName: file.name });
+        }
+      };
+      
+      xhr.onerror = () => {
+        resolve({ success: false, error: '网络错误', fileName: file.name });
+      };
+      
+      xhr.ontimeout = () => {
+        resolve({ success: false, error: '上传超时', fileName: file.name });
+      };
+      
+      xhr.open('POST', endpoint);
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.timeout = 300000; // 5分钟超时
+      xhr.send(formData);
+    });
   };
 
   const handleImageButtonClick = () => {
@@ -209,18 +277,61 @@ function MessageInput({ onSendMessage }) {
 
   return (
     <form onSubmit={handleSubmit} className="message-form">
+      {/* 上传进度显示 */}
+      {isUploading && (
+        <div className="upload-progress-container">
+          {/* 多文件上传队列信息 */}
+          {uploadQueue.length > 1 && (
+            <div className="upload-queue-info">
+              <span className="queue-status">
+                正在上传第 {currentUploadIndex + 1} 个文件，共 {uploadQueue.length} 个
+              </span>
+              <span className="current-file-name">
+                {uploadQueue[currentUploadIndex]?.name}
+              </span>
+            </div>
+          )}
+          
+          <div className="upload-progress-bar">
+            <div 
+              className="upload-progress-fill" 
+              style={{ width: `${uploadProgress}%` }}
+            ></div>
+          </div>
+          <div className="upload-info">
+            <div className="upload-stats">
+              <span className="upload-percentage">{uploadProgress.toFixed(1)}%</span>
+              <span className="upload-size">
+                {formatFileSize(uploadedBytes)} / {formatFileSize(totalBytes)}
+              </span>
+            </div>
+            <div className="upload-speed-info">
+              <span className="upload-speed">
+                {uploadSpeed > 0 ? formatSpeed(uploadSpeed) : '计算中...'}
+              </span>
+              {remainingTime > 0 && (
+                <span className="upload-remaining">
+                  剩余 {formatTime(remainingTime)}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="input-container">
         <input
           type="file"
           ref={fileInputRef}
           onChange={handleImageUpload}
           accept="image/*"
+          multiple
           style={{ display: 'none' }}
         />
         <input
           type="file"
           ref={generalFileInputRef}
           onChange={handleFileUpload}
+          multiple
           style={{ display: 'none' }}
         />
         <button

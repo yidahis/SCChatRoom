@@ -42,7 +42,7 @@
     "webpack-dev-server": "^5.2.2"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2",
+    "concurrently": "^9.2.0",
     "nodemon": "^3.0.1"
   }
 }
