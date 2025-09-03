@@ -31,19 +31,114 @@ npm install
 
 ## 开发模式
 
-### 方式一：同时启动服务器和客户端
+### 🚀 快速启动（推荐）
+
+**一键启动前后端服务**
 ```bash
+cd server
 npm run dev-all
 ```
 
-### 方式二：分别启动
+这个命令会同时启动：
+- 后端Node.js服务器（端口3000）
+- React前端开发服务器（端口3001）
+
+### 🔧 分别启动服务
+
+**方式一：使用两个终端窗口**
 ```bash
 # 终端1：启动后端服务器
+cd server
 npm run dev
 
-# 终端2：启动React开发服务器
+# 终端2：启动React前端开发服务器
+cd server
 npm run dev-client
 ```
+
+**方式二：后台启动后端**
+```bash
+# 后台启动后端服务
+cd server
+npm run dev &
+
+# 启动前端开发服务器
+npm run dev-client
+```
+
+### 📋 可用的npm脚本
+
+| 命令 | 功能 | 说明 |
+|------|------|------|
+| `npm start` | 生产模式启动 | 启动生产版本服务器 |
+| `npm run dev` | 开发模式后端 | 使用nodemon启动后端，支持热重载 |
+| `npm run dev-client` | 开发模式前端 | 启动Webpack开发服务器 |
+| `npm run dev-all` | 开发模式全栈 | 同时启动前后端服务 |
+| `npm run build` | 构建生产版本 | 打包React应用到public/dist |
+
+### ⚙️ 服务器配置说明
+
+**后端服务器（端口3000）**
+- 提供API接口和WebSocket服务
+- 支持文件上传功能
+- 自动连接MongoDB（失败时使用内存存储）
+- 支持跨域请求
+
+**前端开发服务器（端口3001）**
+- Webpack开发服务器，支持热重载
+- 自动代理API请求到后端服务器
+- 支持React组件的实时更新
+- 包含开发调试工具
+
+### 🌐 代理配置
+
+前端开发服务器已配置代理，以下路径会自动转发到后端：
+- `/socket.io` → `http://localhost:3000`
+- `/api` → `http://localhost:3000`
+- `/uploads` → `http://localhost:3000`
+
+### 🔍 启动状态检查
+
+**检查服务是否正常运行：**
+```bash
+# 检查端口占用
+lsof -i :3000  # 后端服务
+lsof -i :3001  # 前端服务
+
+# 测试API连接
+curl http://localhost:3000/api/health
+
+# 查看服务日志
+npm run dev  # 查看后端日志
+```
+
+### ⚠️ 常见启动问题
+
+1. **端口被占用**
+   ```bash
+   # 杀死占用端口的进程
+   kill -9 $(lsof -ti:3000)
+   kill -9 $(lsof -ti:3001)
+   ```
+
+2. **依赖安装问题**
+   ```bash
+   # 清除缓存重新安装
+   rm -rf node_modules package-lock.json
+   npm install
+   ```
+
+3. **MongoDB连接失败**
+   - 应用会自动切换到内存存储模式
+   - 数据在服务器重启后会丢失
+   - 生产环境建议配置MongoDB连接
+
+### 🎯 开发工作流建议
+
+1. **首次启动**：使用 `npm run dev-all` 快速启动
+2. **前端开发**：只需运行 `npm run dev-client`
+3. **后端开发**：只需运行 `npm run dev`
+4. **全栈开发**：保持两个服务同时运行
 
 ## 访问地址
 

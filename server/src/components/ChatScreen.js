@@ -2,11 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import UsersSidebar from './UsersSidebar';
+import FileList from './FileList';
 
 function ChatScreen({ currentUser, socket, onLogout }) {
   const [messages, setMessages] = useState([]);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [showUsersSidebar, setShowUsersSidebar] = useState(false);
+  const [showFileList, setShowFileList] = useState(false);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -83,14 +85,26 @@ function ChatScreen({ currentUser, socket, onLogout }) {
               <span className="current-username">{currentUser?.username}</span>
             </div>
             <button 
+              className="files-toggle"
+              onClick={() => setShowFileList(true)}
+              title="历史文件列表"
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <polyline points="14,2 14,8 20,8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <polyline points="10,9 9,9 8,9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+            <button 
               className="users-toggle"
               onClick={() => setShowUsersSidebar(true)}
             >
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                 <circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2"/>
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M23 21v-2a4 4 0 0 1 0 7.75" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
             <button className="logout-btn" onClick={handleLogout}>
@@ -109,6 +123,12 @@ function ChatScreen({ currentUser, socket, onLogout }) {
         users={onlineUsers}
         isOpen={showUsersSidebar}
         onClose={() => setShowUsersSidebar(false)}
+      />
+
+      {/* 文件列表 */}
+      <FileList 
+        isOpen={showFileList}
+        onClose={() => setShowFileList(false)}
       />
 
       {/* 消息区域 */}

@@ -38,9 +38,9 @@ connectDB().then(() => {
 });
 
 // 中间件配置 - 支持大文件上传
-console.log('⚙️ [后端] 配置Express中间件 - 请求体大小限制: 5GB');
-app.use(express.json({ limit: '5gb' }));
-app.use(express.urlencoded({ extended: true, limit: '5gb' }));
+console.log('⚙️ [后端] 配置Express中间件 - 请求体大小限制: 无限制');
+app.use(express.json({ limit: '50gb' }));
+app.use(express.urlencoded({ extended: true, limit: '50gb' }));
 
 // 配置会话中间件（仅在MongoDB可用时使用MongoStore）
 const sessionConfig = {
@@ -108,9 +108,7 @@ const imageUpload = multer({
 // 通用文件上传配置
 const fileUpload = multer({
   storage: storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024 * 1024 // 5GB限制
-  },
+  // 文件大小限制已移除，允许上传任意大小的文件
   fileFilter: function (req, file, cb) {
     console.log('🔍 [后端] 检查文件类型:', {
       originalname: file.originalname,
@@ -217,6 +215,48 @@ app.post('/api/upload/file', authenticateToken, (req, res) => {
       res.status(500).json({ error: `文件上传失败: ${error.message}` });
     }
   });
+});
+
+// 获取文件列表路由
+app.get('/api/files', authenticateToken, async (req, res) => {
+  try {
+    console.log('📁 [后端] 收到文件列表请求');
+    
+    const files = await fs.promises.readdir(uploadsDir);
+    const fileList = [];
+    
+    for (const filename of files) {
+      const filePath = path.join(uploadsDir, filename);
+      const stats = await fs.promises.stat(filePath);
+      
+      // 解析文件名，提取原始文件名
+      const ext = path.extname(filename);
+      const baseName = path.basename(filename, ext);
+      const originalName = baseName.split('-').slice(0, -1).join('-') + ext;
+      
+      fileList.push({
+        filename: filename,
+        originalName: originalName,
+        size: stats.size,
+        sizeFormatted: formatFileSize(stats.size),
+        uploadTime: stats.mtime,
+        type: path.extname(filename).toLowerCase()
+      });
+    }
+    
+    // 按上传时间倒序排列
+    fileList.sort((a, b) => new Date(b.uploadTime) - new Date(a.uploadTime));
+    
+    console.log(`📁 [后端] 返回文件列表，共 ${fileList.length} 个文件`);
+    res.json({
+      success: true,
+      files: fileList
+    });
+    
+  } catch (error) {
+    console.error('❌ [后端] 获取文件列表失败:', error);
+    res.status(500).json({ error: '获取文件列表失败' });
+  }
 });
 
 // 文件下载路由

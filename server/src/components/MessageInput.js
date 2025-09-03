@@ -99,13 +99,7 @@ function MessageInput({ onSendMessage }) {
     const files = Array.from(e.target.files);
     if (!files.length) return;
 
-    // 检查文件大小限制（5GB）
-    const maxSize = 5 * 1024 * 1024 * 1024; // 5GB
-    const oversizedFiles = files.filter(file => file.size > maxSize);
-    if (oversizedFiles.length > 0) {
-      alert(`以下文件大小超过5GB限制：${oversizedFiles.map(f => `${f.name} (${(f.size / 1024 / 1024).toFixed(2)}MB)`).join(', ')}`);
-      return;
-    }
+    // 文件大小检查已移除，允许上传任意大小的文件
 
     // 检查危险文件扩展名
     const dangerousExts = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.com', '.jar', '.js', '.vbs', '.ps1'];
