@@ -14,6 +14,7 @@ function MessageInput({ onSendMessage }) {
   const fileInputRef = useRef(null);
   const generalFileInputRef = useRef(null);
   const uploadStartTimeRef = useRef(null);
+  const perFileUploadedRef = useRef({});
 
   // 格式化文件大小
   const formatFileSize = (bytes) => {
@@ -45,6 +46,7 @@ function MessageInput({ onSendMessage }) {
     setUploadedBytes(0);
     setTotalBytes(0);
     uploadStartTimeRef.current = null;
+    perFileUploadedRef.current = {};
   };
 
   const handleSubmit = (e) => {
@@ -127,7 +129,41 @@ function MessageInput({ onSendMessage }) {
     }
   };
 
-  // 多文件上传函数
+  // 并发控制器
+  const runWithConcurrency = async (items, limit, worker) => {
+    const results = new Array(items.length);
+    let nextIndex = 0;
+    let activeCount = 0;
+
+    return new Promise((resolve, reject) => {
+      const launchNext = () => {
+        while (activeCount < limit && nextIndex < items.length) {
+          const current = nextIndex++;
+          activeCount++;
+          setCurrentUploadIndex(current);
+          worker(items[current], current)
+            .then((res) => {
+              results[current] = res;
+            })
+            .catch((err) => {
+              results[current] = { success: false, error: err?.message || String(err) };
+            })
+            .finally(() => {
+              activeCount--;
+              if (nextIndex >= items.length && activeCount === 0) {
+                resolve(results);
+              } else {
+                launchNext();
+              }
+            });
+        }
+      };
+
+      launchNext();
+    });
+  };
+
+  // 多文件上传函数（受控并发）
   const uploadMultipleFiles = async (files, type, token) => {
     setIsUploading(true);
     setUploadQueue(files);
@@ -139,23 +175,15 @@ function MessageInput({ onSendMessage }) {
     const totalSize = files.reduce((sum, file) => sum + file.size, 0);
     setTotalBytes(totalSize);
     uploadStartTimeRef.current = Date.now();
+    perFileUploadedRef.current = {};
     
-    let totalUploadedBytes = 0;
-    const results = [];
-    
+    const concurrency = 4; // 受控并发数
+
     try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        setCurrentUploadIndex(i);
-        
-        console.log(`🔄 上传文件 ${i + 1}/${files.length}: ${file.name}`);
-        
-        const result = await uploadSingleFile(file, type, token, totalUploadedBytes, totalSize);
-        results.push(result);
-        totalUploadedBytes += file.size;
-        
-        // 发送消息
-        if (result.success) {
+      const results = await runWithConcurrency(files, concurrency, async (file, index) => {
+        console.log(`🔄 上传文件 ${index + 1}/${files.length}: ${file.name}`);
+        const result = await uploadSingleFile(file, type, token, index, totalSize);
+        if (result?.success) {
           if (type === 'image') {
             onSendMessage({
               type: 'image',
@@ -174,20 +202,19 @@ function MessageInput({ onSendMessage }) {
             });
           }
         }
-      }
-      
+        return result;
+      });
+
       setUploadResults(results);
-      
-      // 显示上传结果摘要
-      const successCount = results.filter(r => r.success).length;
+
+      const successCount = results.filter(r => r && r.success).length;
       const failCount = results.length - successCount;
-      
       if (failCount === 0) {
         console.log(`✅ 所有文件上传成功 (${successCount}/${results.length})`);
       } else {
         alert(`上传完成：${successCount} 个成功，${failCount} 个失败`);
       }
-      
+
     } catch (error) {
       console.error('💥 多文件上传异常:', error);
       alert(`文件上传失败: ${error.message}`);
@@ -199,50 +226,52 @@ function MessageInput({ onSendMessage }) {
     }
   };
   
-  // 单文件上传函数
-  const uploadSingleFile = async (file, type, token, previousBytes, totalBytes) => {
-    return new Promise((resolve, reject) => {
+  // 单文件上传函数（带全局进度聚合）
+  const uploadSingleFile = async (file, type, token, fileIndex, totalBytesValue) => {
+    return new Promise((resolve) => {
       const formData = new FormData();
       const fieldName = type === 'image' ? 'image' : 'file';
       const endpoint = type === 'image' ? '/api/upload/image' : '/api/upload/file';
-      
       formData.append(fieldName, file);
-      
+
       const xhr = new XMLHttpRequest();
-      
+
+      const updateAggregatedProgress = (bytesForThisFile) => {
+        perFileUploadedRef.current[fileIndex] = bytesForThisFile;
+        const sumUploaded = Object.values(perFileUploadedRef.current).reduce((s, v) => s + (v || 0), 0);
+        setUploadedBytes(sumUploaded);
+        const progress = totalBytesValue > 0 ? (sumUploaded / totalBytesValue) * 100 : 0;
+        setUploadProgress(progress);
+
+        const currentTime = Date.now();
+        const elapsedTime = (currentTime - (uploadStartTimeRef.current || currentTime)) / 1000;
+        if (elapsedTime > 0) {
+          const speed = sumUploaded / elapsedTime;
+          setUploadSpeed(speed);
+          const remaining = Math.max((totalBytesValue - sumUploaded) / (speed || 1), 0);
+          setRemainingTime(remaining);
+        }
+      };
+
       // 监听上传进度
       xhr.upload.addEventListener('progress', (event) => {
         if (event.lengthComputable) {
-          const currentFileProgress = (event.loaded / event.total) * 100;
-          const overallProgress = ((previousBytes + event.loaded) / totalBytes) * 100;
-          const currentTime = Date.now();
-          const elapsedTime = (currentTime - uploadStartTimeRef.current) / 1000;
-          
-          setUploadProgress(overallProgress);
-          setUploadedBytes(previousBytes + event.loaded);
-          
-          if (elapsedTime > 0) {
-            const speed = (previousBytes + event.loaded) / elapsedTime;
-            setUploadSpeed(speed);
-            
-            if (speed > 0) {
-              const remaining = (totalBytes - previousBytes - event.loaded) / speed;
-              setRemainingTime(remaining > 0 ? remaining : 0);
-            }
-          }
+          updateAggregatedProgress(event.loaded);
         }
       });
       
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
+        try {
+          if (xhr.status >= 200 && xhr.status < 300) {
             const result = JSON.parse(xhr.responseText);
+            // 确保最终计入该文件完整大小
+            updateAggregatedProgress(file.size);
             resolve(result);
-          } catch (e) {
-            resolve({ success: false, error: '响应解析失败', fileName: file.name });
+          } else {
+            resolve({ success: false, error: `HTTP ${xhr.status}`, fileName: file.name });
           }
-        } else {
-          resolve({ success: false, error: `HTTP ${xhr.status}`, fileName: file.name });
+        } catch (e) {
+          resolve({ success: false, error: '响应解析失败', fileName: file.name });
         }
       };
       

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 function MessageList({ messages, currentUser }) {
   const [modalImage, setModalImage] = useState(null);
   const [downloadingFiles, setDownloadingFiles] = useState(new Set());
+  const [downloadStatus, setDownloadStatus] = useState(new Map()); // filename -> { received, total, percent, speed }
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -10,6 +11,11 @@ function MessageList({ messages, currentUser }) {
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const formatSpeed = (bytesPerSecond) => {
+    if (!bytesPerSecond || bytesPerSecond <= 0) return '计算中...';
+    return formatFileSize(bytesPerSecond) + '/s';
   };
 
   const getFileIcon = (mimetype) => {
@@ -63,6 +69,11 @@ function MessageList({ messages, currentUser }) {
     try {
       // 设置下载状态
       setDownloadingFiles(prev => new Set(prev).add(filename));
+      setDownloadStatus(prev => {
+        const next = new Map(prev);
+        next.set(filename, { received: 0, total: 0, percent: 0, speed: 0, startTime: Date.now() });
+        return next;
+      });
       
       const token = localStorage.getItem('token');
       if (!token) {
@@ -76,48 +87,70 @@ function MessageList({ messages, currentUser }) {
         timestamp: new Date().toISOString()
       });
 
-      const response = await fetch(`/api/download/${filename}`, {
+      const response = await fetch(`/api/download/${encodeURIComponent(filename)}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
 
-      console.log('📡 [前端] 下载响应状态:', {
-        status: response.status,
-        statusText: response.statusText,
-        headers: Object.fromEntries(response.headers.entries())
-      });
-
-      if (response.ok) {
-        const contentLength = response.headers.get('content-length');
-        console.log('📦 [前端] 开始处理文件数据:', {
-          contentLength: contentLength ? `${contentLength} bytes` : '未知大小'
-        });
-        
-        const blob = await response.blob();
-        console.log('✅ [前端] 文件数据处理完成:', {
-          blobSize: blob.size,
-          blobType: blob.type
-        });
-        
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = originalName || filename;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-        
-        console.log('🎉 [前端] 文件下载成功:', originalName || filename);
-      } else {
+      if (!response.ok) {
         console.error('❌ [前端] 下载失败:', {
           status: response.status,
           statusText: response.statusText
         });
         alert('文件下载失败');
+        return;
       }
+
+      const contentLengthHeader = response.headers.get('content-length');
+      const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : 0;
+
+      const reader = response.body.getReader();
+      const chunks = [];
+      let received = 0;
+      const startTime = Date.now();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          received += value.length;
+          const elapsedSec = Math.max((Date.now() - startTime) / 1000, 0.001);
+          const speed = received / elapsedSec;
+          const percent = totalBytes > 0 ? (received / totalBytes) * 100 : 0;
+          setDownloadStatus(prev => {
+            const next = new Map(prev);
+            const current = next.get(filename) || { received: 0, total: totalBytes, percent: 0, speed: 0, startTime };
+            next.set(filename, { ...current, received, total: totalBytes, percent, speed });
+            return next;
+          });
+        }
+      }
+
+      // 合并为 Blob 并保存
+      const blob = new Blob(chunks);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = originalName || filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      // 结束时强制 100%
+      setDownloadStatus(prev => {
+        const next = new Map(prev);
+        const current = next.get(filename);
+        if (current) {
+          next.set(filename, { ...current, received: totalBytes || current.received, total: totalBytes || current.total, percent: 100, speed: 0 });
+        }
+        return next;
+      });
+
+      console.log('🎉 [前端] 文件下载成功:', originalName || filename);
     } catch (error) {
       console.error('💥 [前端] 下载错误:', error);
       alert('文件下载失败');
@@ -128,6 +161,14 @@ function MessageList({ messages, currentUser }) {
         newSet.delete(filename);
         return newSet;
       });
+      // 稍后清理进度条展示
+      setTimeout(() => {
+        setDownloadStatus(prev => {
+          const next = new Map(prev);
+          next.delete(filename);
+          return next;
+        });
+      }, 2000);
     }
   };
   const formatTime = (timestamp) => {
@@ -151,6 +192,7 @@ function MessageList({ messages, currentUser }) {
           const isOwn = isOwnMessage(message);
           const messageUsername = message.user ? message.user.username : message.username;
           const messageContent = message.content || message.message;
+          const dl = message.type === 'file' ? downloadStatus.get(message.filename) : null;
           
           return (
             <div 
@@ -194,6 +236,21 @@ function MessageList({ messages, currentUser }) {
                         <div className="file-details">
                           <div className="file-name">{message.originalName}</div>
                           <div className="file-size">{formatFileSize(message.size)}</div>
+                          {/* 下载进度显示 */}
+                          {dl && (
+                            <div className="download-progress">
+                              <div className="download-progress-bar">
+                                <div className="download-progress-fill" style={{ width: `${Math.min(100, dl.percent || 0)}%` }}></div>
+                              </div>
+                              <div className="download-progress-info">
+                                <span className="download-percentage">{(dl.percent || 0).toFixed(1)}%</span>
+                                <span className="download-size">
+                                  {formatFileSize(dl.received)}{dl.total ? ` / ${formatFileSize(dl.total)}` : ''}
+                                </span>
+                                <span className="download-speed">{formatSpeed(dl.speed)}</span>
+                              </div>
+                            </div>
+                          )}
                         </div>
                         <div className="download-icon">
                           {downloadingFiles.has(message.filename) ? (

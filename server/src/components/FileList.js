@@ -5,6 +5,7 @@ function FileList({ isOpen, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [downloadingFiles, setDownloadingFiles] = useState(new Set());
+  const [downloadStatus, setDownloadStatus] = useState(new Map()); // filename -> { received, total, percent, speed }
 
   useEffect(() => {
     if (isOpen) {
@@ -51,6 +52,11 @@ function FileList({ isOpen, onClose }) {
     if (downloadingFiles.has(filename)) return;
 
     setDownloadingFiles(prev => new Set(prev).add(filename));
+    setDownloadStatus(prev => {
+      const next = new Map(prev);
+      next.set(filename, { received: 0, total: 0, percent: 0, speed: 0, startTime: Date.now() });
+      return next;
+    });
     
     try {
       const token = localStorage.getItem('token');
@@ -59,7 +65,7 @@ function FileList({ isOpen, onClose }) {
         return;
       }
 
-      const response = await fetch(`/api/download/${filename}`, {
+      const response = await fetch(`/api/download/${encodeURIComponent(filename)}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -69,8 +75,33 @@ function FileList({ isOpen, onClose }) {
         throw new Error('下载失败');
       }
 
-      // 创建下载链接
-      const blob = await response.blob();
+      const contentLengthHeader = response.headers.get('content-length');
+      const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : 0;
+
+      const reader = response.body.getReader();
+      const chunks = [];
+      let received = 0;
+      const startTime = Date.now();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          received += value.length;
+          const elapsedSec = Math.max((Date.now() - startTime) / 1000, 0.001);
+          const speed = received / elapsedSec;
+          const percent = totalBytes > 0 ? (received / totalBytes) * 100 : 0;
+          setDownloadStatus(prev => {
+            const next = new Map(prev);
+            const current = next.get(filename) || { received: 0, total: totalBytes, percent: 0, speed: 0, startTime };
+            next.set(filename, { ...current, received, total: totalBytes, percent, speed });
+            return next;
+          });
+        }
+      }
+
+      const blob = new Blob(chunks);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -79,6 +110,15 @@ function FileList({ isOpen, onClose }) {
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
+
+      setDownloadStatus(prev => {
+        const next = new Map(prev);
+        const current = next.get(filename);
+        if (current) {
+          next.set(filename, { ...current, received: totalBytes || current.received, total: totalBytes || current.total, percent: 100, speed: 0 });
+        }
+        return next;
+      });
 
     } catch (err) {
       console.error('下载失败:', err);
@@ -89,6 +129,13 @@ function FileList({ isOpen, onClose }) {
         newSet.delete(filename);
         return newSet;
       });
+      setTimeout(() => {
+        setDownloadStatus(prev => {
+          const next = new Map(prev);
+          next.delete(filename);
+          return next;
+        });
+      }, 2000);
     }
   };
 
@@ -98,6 +145,11 @@ function FileList({ isOpen, onClose }) {
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const formatSpeed = (bytesPerSecond) => {
+    if (!bytesPerSecond || bytesPerSecond <= 0) return '计算中...';
+    return formatFileSize(bytesPerSecond) + '/s';
   };
 
   const formatDate = (dateString) => {
@@ -166,37 +218,61 @@ function FileList({ isOpen, onClose }) {
 
           {!loading && !error && files.length > 0 && (
             <div className="files-grid">
-              {files.map((file) => (
-                <div key={file.filename} className="file-item">
-                  <div className="file-icon">
-                    {getFileIcon(file.type)}
-                  </div>
-                  <div className="file-info">
-                    <div className="file-name" title={file.originalName}>
-                      {file.originalName}
+              {files.map((file) => {
+                const dl = downloadStatus.get(file.filename);
+                return (
+                  <div key={file.filename} className="file-item">
+                    {/* 文件信息垂直排列，确保每项独占一行 */}
+                    <div className="file-info" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px' }}>
+                      <div className="file-name" title={file.originalName}>
+                        {file.originalName}
+                      </div>
+                      <div className="file-details-line">
+                        {file.sizeFormatted}
+                      </div>
+                      <div className="file-details-line">
+                        {formatDate(file.uploadTime)}
+                      </div>
                     </div>
-                    <div className="file-details">
-                      <span className="file-size">{file.sizeFormatted}</span>
-                      <span className="file-date">{formatDate(file.uploadTime)}</span>
-                    </div>
-                  </div>
-                  <button
-                    className={`download-btn ${downloadingFiles.has(file.filename) ? 'downloading' : ''}`}
-                    onClick={() => handleDownload(file.filename, file.originalName)}
-                    disabled={downloadingFiles.has(file.filename)}
-                  >
-                    {downloadingFiles.has(file.filename) ? (
-                      <div className="spinner small"></div>
-                    ) : (
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                        <polyline points="7,10 12,15 17,10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                        <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
+                    <button
+                      className={`download-btn ${downloadingFiles.has(file.filename) ? 'downloading' : ''}`}
+                      onClick={() => handleDownload(file.filename, file.originalName)}
+                      disabled={downloadingFiles.has(file.filename)}
+                    >
+                      {downloadingFiles.has(file.filename) ? (
+                        <div className="spinner small"></div>
+                      ) : (
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          <polyline points="7,10 12,15 17,10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </button>
+                    {dl && (
+                      <div
+                        className="download-progress inline-right"
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'flex-end',
+                          width: '180px',
+                          minWidth: '180px',
+                          whiteSpace: 'nowrap',
+                          fontVariantNumeric: 'tabular-nums',
+                          fontFeatureSettings: '"tnum" 1'
+                        }}
+                      >
+                        <div className="download-progress-info-line" style={{ textAlign: 'right', width: '100%' }}>{(dl.percent || 0).toFixed(1)}%</div>
+                        <div className="download-progress-info-line" style={{ textAlign: 'right', width: '100%' }}>
+                          {formatFileSize(dl.received)}{dl.total ? ` / ${formatFileSize(dl.total)}` : ''}
+                        </div>
+                        <div className="download-progress-info-line" style={{ textAlign: 'right', width: '100%' }}>{formatSpeed(dl.speed)}</div>
+                      </div>
                     )}
-                  </button>
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
