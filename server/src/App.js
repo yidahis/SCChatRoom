@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import LoginScreen from './components/LoginScreen';
 import ChatScreen from './components/ChatScreen';
+import FileBrowser from './components/FileBrowser';
 import { io } from 'socket.io-client';
 
 function App() {
@@ -44,17 +45,29 @@ function App() {
     }
   };
 
+  // 根据当前屏幕状态显示不同组件
+  const renderContent = () => {
+    switch (currentScreen) {
+      case 'login':
+        return <LoginScreen onLogin={handleLogin} />;
+      case 'chat':
+        return (
+          <ChatScreen 
+            currentUser={currentUser} 
+            socket={socket} 
+            onLogout={handleLogout} 
+          />
+        );
+      case 'file-browser':
+        return <FileBrowser currentUser={currentUser} onLogout={handleLogout} />;
+      default:
+        return <LoginScreen onLogin={handleLogin} />;
+    }
+  };
+
   return (
     <div className="app">
-      {currentScreen === 'login' ? (
-        <LoginScreen onLogin={handleLogin} />
-      ) : (
-        <ChatScreen 
-          currentUser={currentUser} 
-          socket={socket} 
-          onLogout={handleLogout} 
-        />
-      )}
+      {renderContent()}
     </div>
   );
 }

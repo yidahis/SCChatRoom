@@ -7,7 +7,8 @@ const session = require('express-session');
 const MongoStore = require('connect-mongo');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
-const fs = require('fs');
+const fs = require('fs'); // 导入完整的fs模块
+const fsPromises = require('fs').promises; // 使用Promise版本
 
 // 导入数据库和模型
 const { connectDB, isUsingMemoryStorage, memoryUserOperations } = require('./config/database');
@@ -679,6 +680,156 @@ io.on('connection', async (socket) => {
   socket.on('error', (error) => {
     console.error('Socket错误:', error);
   });
+});
+
+// 添加文件下载API
+app.get('/api/filesystem/download', authenticateToken, (req, res) => {
+  try {
+    const { filePath } = req.query;
+    
+    if (!filePath) {
+      return res.status(400).json({ 
+        success: false, 
+        error: '文件路径不能为空' 
+      });
+    }
+    
+    // 解析并验证文件路径
+    const resolvedPath = path.resolve(filePath);
+    const homeDir = os.homedir();
+    
+    // 确保文件在用户主目录下（安全检查）
+    if (!resolvedPath.startsWith(homeDir)) {
+      return res.status(403).json({ 
+        success: false, 
+        error: '访问被拒绝：只能访问用户主目录下的文件' 
+      });
+    }
+    
+    // 检查文件是否存在
+    if (!fs.existsSync(resolvedPath)) {
+      return res.status(404).json({ 
+        success: false, 
+        error: '文件不存在' 
+      });
+    }
+    
+    // 检查是否为文件（而不是目录）
+    const stat = fs.statSync(resolvedPath);
+    if (!stat.isFile()) {
+      return res.status(400).json({ 
+        success: false, 
+        error: '指定路径不是文件' 
+      });
+    }
+    
+    // 获取文件名
+    const fileName = path.basename(resolvedPath);
+    
+    // 设置响应头并发送文件
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.sendFile(resolvedPath, { root: '/' });
+  } catch (error) {
+    console.error('文件下载失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: '文件下载失败: ' + error.message 
+    });
+  }
+});
+
+// 添加文件系统相关路由
+app.get('/api/filesystem/list', authenticateToken, async (req, res) => {
+  try {
+    const { dirPath } = req.query;
+    let targetPath;
+    
+    // 如果没有提供路径，则使用用户的主目录
+    if (!dirPath) {
+      targetPath = os.homedir();
+    } else {
+      // 确保路径在允许的范围内（基础安全检查）
+      targetPath = path.resolve(dirPath);
+      
+      // 确保不会访问系统根目录以上的内容（简单防护）
+      const homeDir = os.homedir();
+      if (!targetPath.startsWith(homeDir) && targetPath !== homeDir) {
+        return res.status(403).json({ 
+          success: false, 
+          error: '访问被拒绝：只能访问用户主目录下的文件' 
+        });
+      }
+    }
+    
+    // 检查路径是否存在
+    try {
+      await fsPromises.access(targetPath);
+    } catch (err) {
+      return res.status(404).json({ 
+        success: false, 
+        error: '路径不存在' 
+      });
+    }
+    
+    // 读取目录内容
+    const items = await fsPromises.readdir(targetPath, { withFileTypes: true });
+    
+    // 格式化返回数据
+    const formattedItems = await Promise.all(items.map(async (item) => {
+      const fullPath = path.join(targetPath, item.name);
+      try {
+        const stat = await fsPromises.stat(fullPath);
+        
+        return {
+          name: item.name,
+          type: item.isDirectory() ? 'directory' : 'file',
+          size: item.isFile() ? stat.size : 0,
+          modified: stat.mtime,
+          path: fullPath
+        };
+      } catch (statError) {
+        // 如果无法获取文件信息，返回基本数据
+        return {
+          name: item.name,
+          type: item.isDirectory() ? 'directory' : 'file',
+          size: 0,
+          modified: new Date(),
+          path: fullPath
+        };
+      }
+    }));
+    
+    res.json({
+      success: true,
+      path: targetPath,
+      items: formattedItems
+    });
+  } catch (error) {
+    console.error('读取目录失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: '读取目录失败: ' + error.message 
+    });
+  }
+});
+
+// 添加获取系统根目录的API
+app.get('/api/filesystem/root', authenticateToken, (req, res) => {
+  try {
+    const homeDir = os.homedir();
+    res.json({
+      success: true,
+      homeDir: homeDir,
+      platform: process.platform
+    });
+  } catch (error) {
+    console.error('获取系统信息失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: '获取系统信息失败: ' + error.message 
+    });
+  }
 });
 
 // 全局错误处理中间件
