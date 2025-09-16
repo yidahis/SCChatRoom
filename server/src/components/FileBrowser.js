@@ -6,6 +6,7 @@ function FileBrowser({ isOpen, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [homeDir, setHomeDir] = useState('');
+  const [showHidden, setShowHidden] = useState(false); // 添加显示隐藏文件的状态
   const fileInputRef = useRef(null);
 
   // 初始化时获取根目录
@@ -64,7 +65,7 @@ function FileBrowser({ isOpen, onClose }) {
         return;
       }
 
-      const response = await fetch(`/api/filesystem/list?dirPath=${encodeURIComponent(path)}`, {
+      const response = await fetch(`/api/filesystem/list?dirPath=${encodeURIComponent(path)}&showHidden=${showHidden}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -171,6 +172,15 @@ function FileBrowser({ isOpen, onClose }) {
     }
   };
 
+  // 切换显示隐藏文件
+  const toggleShowHidden = () => {
+    const newShowHidden = !showHidden;
+    setShowHidden(newShowHidden);
+    
+    // 重新加载当前目录
+    listDirectory(currentPath);
+  };
+
   // 格式化文件大小
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '-';
@@ -232,54 +242,78 @@ function FileBrowser({ isOpen, onClose }) {
           )}
 
           {!loading && !error && (
-            <div className="file-browser-grid">
-              {files.map((file, index) => (
-                <div 
-                  key={index} 
-                  className={`file-item ${file.type === 'directory' ? 'directory' : 'file'}`}
-                  onClick={() => {
-                    if (file.type === 'directory') {
-                      handleDirectoryClick(file.path);
-                    } else {
-                      handleFileClick(file.path, file.name);
-                    }
-                  }}
-                >
-                  <div className="file-icon">
-                    {file.type === 'directory' ? '📁' : '📄'}
+            <div className="file-browser-list">
+              <div className="file-list-header">
+                <div className="file-list-header-item name">名称</div>
+                <div className="file-list-header-item size">大小</div>
+                <div className="file-list-header-item modified">修改时间</div>
+              </div>
+              <div className="file-list-content">
+                {files.map((file, index) => (
+                  <div 
+                    key={index} 
+                    className={`file-list-item ${file.type === 'directory' ? 'directory' : 'file'}`}
+                    onClick={() => {
+                      if (file.type === 'directory') {
+                        handleDirectoryClick(file.path);
+                      } else {
+                        handleFileClick(file.path, file.name);
+                      }
+                    }}
+                  >
+                    <div className="file-list-item-name">
+                      <div className="file-icon">
+                        {file.type === 'directory' ? '📁' : '📄'}
+                      </div>
+                      <span className="file-name" title={file.name}>
+                        {file.name}
+                      </span>
+                    </div>
+                    <div className="file-list-item-size">
+                      {file.type === 'directory' ? '-' : formatFileSize(file.size)}
+                    </div>
+                    <div className="file-list-item-modified">
+                      {formatDate(file.modified)}
+                    </div>
                   </div>
-                  <div className="file-name" title={file.name}>
-                    {file.name}
-                  </div>
-                  <div className="file-size">
-                    {file.type === 'directory' ? '-' : formatFileSize(file.size)}
-                  </div>
-                  <div className="file-modified">
-                    {formatDate(file.modified)}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           )}
         </div>
 
         <div className="file-browser-footer">
-          <button className="refresh-btn" onClick={() => listDirectory(currentPath)} disabled={loading}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M23 4v6h-6M1 20v-6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            刷新
-          </button>
-          <button className="select-files-btn" onClick={openSystemFilePicker}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <polyline points="17,8 12,3 7,8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            选择文件
-          </button>
-          <span className="file-count">共 {files.length} 项</span>
+          <div className="footer-controls">
+            <button className="refresh-btn" onClick={() => listDirectory(currentPath)} disabled={loading}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M23 4v6h-6M1 20v-6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              刷新
+            </button>
+            <button 
+              className={`toggle-hidden-btn ${showHidden ? 'active' : ''}`}
+              onClick={toggleShowHidden}
+              title={showHidden ? '隐藏隐藏文件' : '显示隐藏文件'}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              {showHidden ? '隐藏隐藏文件' : '显示隐藏文件'}
+            </button>
+          </div>
+          <div className="footer-actions">
+            <button className="select-files-btn" onClick={openSystemFilePicker}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <polyline points="17,8 12,3 7,8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              选择文件
+            </button>
+            <span className="file-count">共 {files.length} 项</span>
+          </div>
         </div>
         
         {/* 隐藏的文件输入元素 */}

@@ -742,7 +742,7 @@ app.get('/api/filesystem/download', authenticateToken, (req, res) => {
 // 添加文件系统相关路由
 app.get('/api/filesystem/list', authenticateToken, async (req, res) => {
   try {
-    const { dirPath } = req.query;
+    const { dirPath, showHidden } = req.query;
     let targetPath;
     
     // 如果没有提供路径，则使用用户的主目录
@@ -775,8 +775,11 @@ app.get('/api/filesystem/list', authenticateToken, async (req, res) => {
     // 读取目录内容
     const items = await fsPromises.readdir(targetPath, { withFileTypes: true });
     
+    // 根据showHidden参数过滤隐藏文件
+    const filteredItems = showHidden === 'true' ? items : items.filter(item => !item.name.startsWith('.'));
+    
     // 格式化返回数据
-    const formattedItems = await Promise.all(items.map(async (item) => {
+    const formattedItems = await Promise.all(filteredItems.map(async (item) => {
       const fullPath = path.join(targetPath, item.name);
       try {
         const stat = await fsPromises.stat(fullPath);
