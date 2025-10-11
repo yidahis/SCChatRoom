@@ -40,7 +40,7 @@ npm run dev-all
 ```
 
 这个命令会同时启动：
-- 后端Node.js服务器（端口3000）
+- 后端Node.js服务器（端口3678）
 - React前端开发服务器（端口3001）
 
 ### 🔧 分别启动服务
@@ -78,7 +78,7 @@ npm run dev-client
 
 ### ⚙️ 服务器配置说明
 
-**后端服务器（端口3000）**
+**后端服务器（端口3678）**
 - 提供API接口和WebSocket服务
 - 支持文件上传功能
 - 自动连接MongoDB（失败时使用内存存储）
@@ -93,20 +93,20 @@ npm run dev-client
 ### 🌐 代理配置
 
 前端开发服务器已配置代理，以下路径会自动转发到后端：
-- `/socket.io` → `http://localhost:3000`
-- `/api` → `http://localhost:3000`
-- `/uploads` → `http://localhost:3000`
+- `/socket.io` → `http://localhost:3678`
+- `/api` → `http://localhost:3678`
+- `/uploads` → `http://localhost:3678`
 
 ### 🔍 启动状态检查
 
 **检查服务是否正常运行：**
 ```bash
 # 检查端口占用
-lsof -i :3000  # 后端服务
+lsof -i :3678  # 后端服务
 lsof -i :3001  # 前端服务
 
 # 测试API连接
-curl http://localhost:3000/api/health
+curl http://localhost:3678/api/health
 
 # 查看服务日志
 npm run dev  # 查看后端日志
@@ -117,7 +117,7 @@ npm run dev  # 查看后端日志
 1. **端口被占用**
    ```bash
    # 杀死占用端口的进程
-   kill -9 $(lsof -ti:3000)
+   kill -9 $(lsof -ti:3678)
    kill -9 $(lsof -ti:3001)
    ```
 
@@ -143,8 +143,7 @@ npm run dev  # 查看后端日志
 ## 访问地址
 
 - **React版本**: http://localhost:3001
-- **原版本**: http://localhost:3000
-- **后端API**: http://localhost:3000
+- **后端API**: http://localhost:3678
 
 ## 生产构建
 
@@ -234,7 +233,7 @@ npm run build
 ### 常见问题
 
 1. **端口冲突**
-   - 确保3000端口（后端）和3001端口（前端）未被占用
+   - 确保3678端口（后端）和3001端口（前端）未被占用
 
 2. **WebSocket连接失败**
    - 检查后端服务器是否正常运行
