@@ -6,13 +6,16 @@ function FileBrowser({ isOpen, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [homeDir, setHomeDir] = useState('');
-  const [showHidden, setShowHidden] = useState(false); // 添加显示隐藏文件的状态
+  const [showHidden, setShowHidden] = useState(false);
+  const [disks, setDisks] = useState([]); // 添加磁盘列表状态
+  const [showDiskSelector, setShowDiskSelector] = useState(false); // 控制磁盘选择器显示
   const fileInputRef = useRef(null);
 
   // 初始化时获取根目录
   useEffect(() => {
     if (isOpen) {
       getHomeDirectory();
+      loadDisks(); // 加载磁盘列表
     }
   }, [isOpen]);
 
@@ -53,10 +56,39 @@ function FileBrowser({ isOpen, onClose }) {
     }
   };
 
+  // 加载磁盘列表
+  const loadDisks = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        return;
+      }
+
+      const response = await fetch('/api/filesystem/disks', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('获取磁盘信息失败');
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        setDisks(data.drives);
+      }
+    } catch (err) {
+      console.error('获取磁盘信息失败:', err);
+      // 不设置错误状态，因为这不是关键功能
+    }
+  };
+
   // 获取目录内容
   const listDirectory = async (path) => {
     setLoading(true);
     setError(null);
+    setShowDiskSelector(false); // 切换到目录视图时隐藏磁盘选择器
     
     try {
       const token = localStorage.getItem('token');
@@ -95,48 +127,119 @@ function FileBrowser({ isOpen, onClose }) {
     listDirectory(dirPath);
   };
 
-  // 处理文件点击（下载文件）
-  const handleFileClick = (filePath, fileName) => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      setError('请先登录');
-      return;
-    }
-    
-    // 创建下载链接
-    const downloadUrl = `/api/filesystem/download?filePath=${encodeURIComponent(filePath)}`;
-    
-    // 使用fetch下载文件
-    fetch(downloadUrl, {
-      headers: {
-        'Authorization': `Bearer ${token}`
+  // 处理下载（文件或文件夹）
+  const handleDownload = async (path, name, isDirectory) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('请先登录');
+        return;
       }
-    })
-    .then(response => {
-      if (!response.ok) {
-        throw new Error('下载失败');
+      
+      // 创建下载链接，根据是否为目录使用不同的API
+      if (isDirectory) {
+        // 遍历目录并为每个文件创建单独的浏览器下载任务
+        setLoading(true);
+        setError(null);
+
+        const filesToDownload = [];
+
+        // 递归遍历目录，收集文件路径与相对名称
+        const traverse = async (dirPath, relBase) => {
+          const listResp = await fetch(`/api/filesystem/list?dirPath=${encodeURIComponent(dirPath)}&showHidden=${showHidden}`, {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          if (!listResp.ok) {
+            throw new Error('列出目录失败: ' + dirPath);
+          }
+          const listData = await listResp.json();
+          if (!listData.success) {
+            throw new Error(listData.error || '列出目录失败');
+          }
+
+          for (const item of listData.items) {
+            const itemRel = relBase ? `${relBase}/${item.name}` : item.name;
+            if (item.type === 'file') {
+              filesToDownload.push({ path: item.path, name: itemRel });
+            } else if (item.type === 'directory') {
+              // 递归子目录
+              await traverse(item.path, itemRel);
+            }
+          }
+        };
+
+        try {
+          await traverse(path, name || '');
+
+          if (filesToDownload.length === 0) {
+            setError('目录中没有可下载的文件');
+            setLoading(false);
+            return;
+          }
+
+          // 为每个文件构建下载链接并触发浏览器下载
+          let index = 0;
+          for (const f of filesToDownload) {
+            index += 1;
+            // 可以在UI上显示进度信息（例如：正在创建下载任务 3 / 12）
+            console.log(`触发下载 ${index}/${filesToDownload.length}:`, f.path);
+
+            const downloadUrl = `/api/filesystem/download?filePath=${encodeURIComponent(f.path)}&token=${encodeURIComponent(token)}`;
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            // 使用相对路径名作为下载文件名，保留目录名以区分同名文件
+            a.download = f.name || '';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+
+            // 逐步清理，给浏览器一点时间去处理下载任务，避免短时间内触发太多弹窗被浏览器拦截
+            await new Promise((r) => setTimeout(r, 250));
+            try { document.body.removeChild(a); } catch (e) {}
+          }
+
+        } catch (trErr) {
+          console.error('遍历或触发下载失败:', trErr);
+          setError('下载失败: ' + trErr.message);
+        } finally {
+          // 浏览器会处理实际下载，短延时后隐藏 loading
+          setTimeout(() => setLoading(false), 1000);
+        }
+
+        return;
       }
-      return response.blob();
-    })
-    .then(blob => {
-      // 创建一个临时的URL来下载文件
-      const url = window.URL.createObjectURL(blob);
+
+      // 单个文件直接让浏览器下载
+      const baseUrl = `/api/filesystem/download?filePath=${encodeURIComponent(path)}`;
+      const sep = baseUrl.includes('?') ? '&' : '?';
+      const downloadUrl = `${baseUrl}${sep}token=${encodeURIComponent(token)}`;
+
+      // 让浏览器直接处理下载（不会把数据读入内存），创建隐藏链接并点击
+      setLoading(true);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName || 'download';
+      a.href = downloadUrl;
+      // 指定下载文件名为原始名字（浏览器会优先使用 Content-Disposition 的 filename）
+      a.download = name || '';
+      a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
-      
       // 清理
       setTimeout(() => {
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-      }, 100);
-    })
-    .catch(error => {
+        try { document.body.removeChild(a); } catch (e) {}
+      }, 1000);
+      // 浏览器会接管下载，异步清理 loading 状态（不影响真正的下载进度显示）
+      setTimeout(() => setLoading(false), 1500);
+
+      // 浏览器会接管下载，异步清理 loading 状态（不影响真正的下载进度显示）
+      setTimeout(() => setLoading(false), 1500);
+    } catch (error) {
       console.error('下载失败:', error);
-      setError('文件下载失败: ' + error.message);
-    });
+      setError('下载失败: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // 打开系统文件选择器
@@ -166,7 +269,22 @@ function FileBrowser({ isOpen, onClose }) {
 
   // 返回上级目录
   const goBack = () => {
-    const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/'));
+    if (!currentPath) return;
+
+    // 规范化路径：去掉末尾斜杠（除根 '/' 外）
+    let p = currentPath;
+    if (p !== '/' && p.endsWith('/')) {
+      p = p.slice(0, -1);
+    }
+
+    // 如果已经是根目录，无法再返回
+    if (p === '/') return;
+
+    const lastSlash = p.lastIndexOf('/');
+    // 如果 lastSlash <= 0，则父路径为根 '/'
+    const parentPath = lastSlash > 0 ? p.substring(0, lastSlash) : '/';
+
+    // 防止无效递归
     if (parentPath && parentPath !== currentPath) {
       listDirectory(parentPath);
     }
@@ -179,6 +297,37 @@ function FileBrowser({ isOpen, onClose }) {
     
     // 重新加载当前目录
     listDirectory(currentPath);
+  };
+
+  // 切换磁盘选择器显示
+  const toggleDiskSelector = () => {
+    setShowDiskSelector(!showDiskSelector);
+  };
+
+  // 处理磁盘选择
+  const handleDiskSelect = (mountPoint) => {
+    // 在切换到磁盘时，确保路径正确处理
+    if (!mountPoint) {
+      console.error('磁盘挂载点为空');
+      setError('无效的磁盘挂载点');
+      return;
+    }
+    
+    try {
+      // 确保路径格式正确（处理Windows和macOS/Linux的路径差异）
+      const normalizedPath = mountPoint.replace(/\\/g, '/');
+
+      // 对于根路径 '/'，直接使用 '/'；其他挂载点确保以斜杠结尾
+      const pathToUse = (normalizedPath === '/' )
+        ? '/'
+        : (normalizedPath.endsWith('/') ? normalizedPath : normalizedPath + '/');
+
+      console.log('选择磁盘，处理后的路径:', pathToUse);
+      listDirectory(pathToUse);
+    } catch (err) {
+      console.error('处理磁盘路径出错:', err);
+      setError('处理磁盘路径出错: ' + err.message);
+    }
   };
 
   // 格式化文件大小
@@ -195,6 +344,12 @@ function FileBrowser({ isOpen, onClose }) {
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     return date.toLocaleString('zh-CN');
+  };
+
+  // 格式化磁盘大小
+  const formatDiskSize = (bytes) => {
+    if (!bytes) return '未知大小';
+    return formatFileSize(bytes);
   };
 
   if (!isOpen) return null;
@@ -217,7 +372,8 @@ function FileBrowser({ isOpen, onClose }) {
               <button 
                 className="back-btn" 
                 onClick={goBack}
-                disabled={currentPath === homeDir || !currentPath}
+                // 在根路径 '/' 时禁用返回按钮；也在没有路径时禁用
+                disabled={currentPath === '/' || !currentPath}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
                   <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -225,6 +381,17 @@ function FileBrowser({ isOpen, onClose }) {
               </button>
               <span className="current-path" title={currentPath}>{currentPath}</span>
             </div>
+            {disks.length > 0 && (
+              <button 
+                className="disk-selector-toggle"
+                onClick={toggleDiskSelector}
+                title="选择其他磁盘"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                  <path d="M3 6h18M6 12h12M9 18h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            )}
           </div>
           
           {loading && (
@@ -241,27 +408,50 @@ function FileBrowser({ isOpen, onClose }) {
             </div>
           )}
 
-          {!loading && !error && (
+          {!loading && !error && showDiskSelector && disks.length > 0 && (
+            <div className="disk-selector">
+              <h4>选择磁盘:</h4>
+              <div className="disk-list">
+                {disks.map((disk, index) => (
+                  <div 
+                    key={index} 
+                    className="disk-item"
+                    onClick={() => handleDiskSelect(disk.mountPoint)}
+                  >
+                    <div className="disk-icon">💾</div>
+                    <div className="disk-info">
+                      <div className="disk-mount">{disk.mountPoint}</div>
+                      <div className="disk-description">{disk.description}</div>
+                    </div>
+                    <div className="disk-size">{formatDiskSize(disk.size)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!loading && !error && !showDiskSelector && (
             <div className="file-browser-list">
               <div className="file-list-header">
                 <div className="file-list-header-item name">名称</div>
                 <div className="file-list-header-item size">大小</div>
                 <div className="file-list-header-item modified">修改时间</div>
+                <div className="file-list-header-item actions">操作</div>
               </div>
               <div className="file-list-content">
                 {files.map((file, index) => (
                   <div 
                     key={index} 
                     className={`file-list-item ${file.type === 'directory' ? 'directory' : 'file'}`}
-                    onClick={() => {
-                      if (file.type === 'directory') {
-                        handleDirectoryClick(file.path);
-                      } else {
-                        handleFileClick(file.path, file.name);
-                      }
-                    }}
                   >
-                    <div className="file-list-item-name">
+                    <div 
+                      className="file-list-item-name"
+                      onClick={() => {
+                        if (file.type === 'directory') {
+                          handleDirectoryClick(file.path);
+                        }
+                      }}
+                    >
                       <div className="file-icon">
                         {file.type === 'directory' ? '📁' : '📄'}
                       </div>
@@ -274,6 +464,22 @@ function FileBrowser({ isOpen, onClose }) {
                     </div>
                     <div className="file-list-item-modified">
                       {formatDate(file.modified)}
+                    </div>
+                    <div className="file-list-item-actions">
+                      <button 
+                        className="download-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDownload(file.path, file.name, file.type === 'directory');
+                        }}
+                        title={file.type === 'directory' ? '下载文件夹' : '下载文件'}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          <polyline points="7,10 12,15 17,10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </button>
                     </div>
                   </div>
                 ))}

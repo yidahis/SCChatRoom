@@ -9,6 +9,7 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const fs = require('fs'); // 导入完整的fs模块
 const fsPromises = require('fs').promises; // 使用Promise版本
+const archiver = require('archiver'); // 用于文件夹压缩
 
 // 导入数据库和模型
 const { connectDB, isUsingMemoryStorage, memoryUserOperations } = require('./config/database');
@@ -85,10 +86,30 @@ const storage = multer.diskStorage({
   },
   filename: function (req, file, cb) {
     // 生成唯一文件名，保留原始文件名
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    const baseName = path.basename(file.originalname, ext);
-    cb(null, baseName + '-' + uniqueSuffix + ext);
+    // 注意：部分浏览器/客户端在 multipart header 中会以 latin1 编码传回文件名，
+    // multer 的 file.originalname 可能会是 latin1 编码的字符串，直接使用会导致中文文件名在磁盘上出现乱码。
+    // 这里先把 originalname 从 latin1 解码为 utf8，再提取扩展名和基础名字。
+    try {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+
+      // 将可能的 latin1 编码转换为 UTF-8
+      const originalNameDecoded = Buffer.from(file.originalname, 'latin1').toString('utf8');
+
+      const ext = path.extname(originalNameDecoded);
+      let baseName = path.basename(originalNameDecoded, ext);
+
+      // 防止文件名中包含路径分隔符或特殊控制字符
+      baseName = baseName.replace(/[/\\\0]/g, '_');
+
+      const finalName = `${baseName}-${uniqueSuffix}${ext}`;
+      cb(null, finalName);
+    } catch (err) {
+      // 在极少数情况下回退到原始处理方式，保证不会阻塞上传
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(file.originalname);
+      const baseName = path.basename(file.originalname, ext).replace(/[/\\\0]/g, '_');
+      cb(null, baseName + '-' + uniqueSuffix + ext);
+    }
   }
 });
 
@@ -184,8 +205,20 @@ app.post('/api/upload/file', authenticateToken, (req, res) => {
         return res.status(400).json({ error: '没有上传文件' });
       }
 
+      // 处理并确保 originalname 为 UTF-8（防止上传中文名出现乱码）
+      let decodedOriginalName = req.file.originalname;
+      try {
+        decodedOriginalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+      } catch (e) {
+        // 如解码失败则保留原始值
+        decodedOriginalName = req.file.originalname;
+      }
+
+      // 更新 req.file.originalname，后续逻辑（或其它中间件）可以使用已解码的值
+      req.file.originalname = decodedOriginalName;
+
       console.log('✅ [后端] 文件接收成功:', {
-        originalname: req.file.originalname,
+        originalname: decodedOriginalName,
         filename: req.file.filename,
         mimetype: req.file.mimetype,
         size: req.file.size,
@@ -199,7 +232,7 @@ app.post('/api/upload/file', authenticateToken, (req, res) => {
         success: true,
         fileUrl: fileUrl,
         filename: req.file.filename,
-        originalName: req.file.originalname,
+        originalName: decodedOriginalName,
         size: req.file.size,
         mimetype: req.file.mimetype
       };
@@ -300,8 +333,21 @@ app.get('/api/download/:filename', authenticateToken, (req, res) => {
       isFile: stats.isFile()
     });
     
-    // 设置响应头
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    // 设置响应头（同时提供 filename 和 filename* 以支持带有 UTF-8 字符的文件名）
+    // filename* 按 RFC5987 使用 UTF-8 编码并 URL-encode
+    try {
+      const encodedFilename = encodeURIComponent(filename);
+      let asciiSafe = filename.replace(/[\"\\\r\n]/g, '');
+      asciiSafe = asciiSafe.replace(/[^\x20-\x7E]/g, '_');
+      if (!asciiSafe) asciiSafe = 'download';
+      res.setHeader('Content-Disposition', `attachment; filename="${asciiSafe}"; filename*=UTF-8''${encodedFilename}`);
+    } catch (e) {
+      try {
+        res.setHeader('Content-Disposition', `attachment; filename="download"`);
+      } catch (ee) {
+        console.error('设置 Content-Disposition 失败:', ee);
+      }
+    }
     res.setHeader('Content-Length', stats.size);
     res.setHeader('Content-Type', 'application/octet-stream');
     
@@ -309,7 +355,7 @@ app.get('/api/download/:filename', authenticateToken, (req, res) => {
       filename,
       contentLength: stats.size,
       headers: {
-        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Disposition': res.getHeader('Content-Disposition'),
         'Content-Length': stats.size,
         'Content-Type': 'application/octet-stream'
       }
@@ -696,15 +742,7 @@ app.get('/api/filesystem/download', authenticateToken, (req, res) => {
     
     // 解析并验证文件路径
     const resolvedPath = path.resolve(filePath);
-    const homeDir = os.homedir();
-    
-    // 确保文件在用户主目录下（安全检查）
-    if (!resolvedPath.startsWith(homeDir)) {
-      return res.status(403).json({ 
-        success: false, 
-        error: '访问被拒绝：只能访问用户主目录下的文件' 
-      });
-    }
+    console.log('下载文件，路径:', resolvedPath);
     
     // 检查文件是否存在
     if (!fs.existsSync(resolvedPath)) {
@@ -726,15 +764,173 @@ app.get('/api/filesystem/download', authenticateToken, (req, res) => {
     // 获取文件名
     const fileName = path.basename(resolvedPath);
     
-    // 设置响应头并发送文件
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    // 设置响应头并使用流式发送文件（支持 UTF-8 文件名）
+    try {
+      // 为了避免在 setHeader 时出现 Invalid character 错误，
+      // 必须确保未编码的 filename 部分只包含 ASCII 可打印字符且没有控制字符。
+      const encodedFilename = encodeURIComponent(fileName);
+      let asciiSafe = fileName.replace(/["\\\r\n]/g, '');
+      // 将非 ASCII 可打印字符替换为下划线
+      asciiSafe = asciiSafe.replace(/[^\x20-\x7E]/g, '_');
+      if (!asciiSafe) asciiSafe = 'download';
+      res.setHeader('Content-Disposition', `attachment; filename="${asciiSafe}"; filename*=UTF-8''${encodedFilename}`);
+    } catch (e) {
+      try {
+        res.setHeader('Content-Disposition', `attachment; filename="download"`);
+      } catch (ee) {
+        console.error('设置 Content-Disposition 失败:', ee);
+      }
+    }
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.sendFile(resolvedPath, { root: '/' });
+    res.setHeader('Content-Length', stat.size);
+
+    // 使用流式传输，避免 sendFile 在某些挂载点或权限下的问题
+    const readStream = fs.createReadStream(resolvedPath);
+
+    readStream.on('open', () => {
+      console.log('开始流式发送文件:', resolvedPath);
+      readStream.pipe(res);
+    });
+
+    readStream.on('error', (streamErr) => {
+      console.error('读取文件流错误:', streamErr);
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, error: '文件读取失败' });
+      } else {
+        // 如果头已发送，直接销毁响应
+        try { res.end(); } catch(e) {}
+      }
+    });
+
+    // 如果客户端中断连接，销毁读取流
+    res.on('close', () => {
+      if (!readStream.destroyed) {
+        console.warn('响应关闭：销毁文件读取流');
+        readStream.destroy();
+      }
+    });
   } catch (error) {
     console.error('文件下载失败:', error);
     res.status(500).json({ 
       success: false, 
       error: '文件下载失败: ' + error.message 
+    });
+  }
+});
+
+// 添加文件夹下载API
+app.get('/api/filesystem/download-folder', authenticateToken, async (req, res) => {
+  try {
+    const { folderPath } = req.query;
+    
+    if (!folderPath) {
+      return res.status(400).json({ 
+        success: false, 
+        error: '未提供文件夹路径' 
+      });
+    }
+    
+    // 解析并规范化路径
+    const resolvedPath = path.resolve(folderPath);
+    console.log('下载文件夹，路径:', resolvedPath);
+    
+    // 检查文件夹是否存在
+    if (!fs.existsSync(resolvedPath)) {
+      return res.status(404).json({ 
+        success: false, 
+        error: '文件夹不存在' 
+      });
+    }
+    
+    // 检查是否为目录
+    const stat = fs.statSync(resolvedPath);
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ 
+        success: false, 
+        error: '指定路径不是文件夹' 
+      });
+    }
+    
+    // 获取文件夹名称
+    const folderName = path.basename(resolvedPath);
+    
+    // 创建一个临时文件来存储zip
+    const zipFileName = `${folderName}.zip`;
+    const zipFilePath = path.join(os.tmpdir(), zipFileName);
+    
+    // 创建一个可写流
+    const output = fs.createWriteStream(zipFilePath);
+    const archive = archiver('zip', {
+      zlib: { level: 9 } // 设置压缩级别
+    });
+    
+    // 监听所有存档数据被写入底层流
+    output.on('close', function() {
+      console.log('文件夹压缩完成，大小:', archive.pointer() + ' bytes');
+      
+      // 发送zip文件（支持 UTF-8 文件名），使用流式传输并在完成后删除临时文件
+      try {
+        const encodedZipName = encodeURIComponent(zipFileName);
+        let asciiSafeZip = zipFileName.replace(/["\\\r\n]/g, '');
+        asciiSafeZip = asciiSafeZip.replace(/[^\x20-\x7E]/g, '_');
+        if (!asciiSafeZip) asciiSafeZip = 'archive.zip';
+        res.setHeader('Content-Disposition', `attachment; filename="${asciiSafeZip}"; filename*=UTF-8''${encodedZipName}`);
+      } catch (e) {
+        try { res.setHeader('Content-Disposition', `attachment; filename="archive.zip"`); } catch (ee) { console.error('设置 Content-Disposition 失败:', ee); }
+      }
+      res.setHeader('Content-Type', 'application/zip');
+
+      // 获取临时zip文件大小并以流式方式发送
+      try {
+        const zipStat = fs.statSync(zipFilePath);
+        res.setHeader('Content-Length', zipStat.size);
+        const zipStream = fs.createReadStream(zipFilePath);
+        zipStream.on('open', () => zipStream.pipe(res));
+        zipStream.on('error', (streamErr) => {
+          console.error('zip 读取流错误:', streamErr);
+          if (!res.headersSent) res.status(500).json({ success: false, error: '发送zip文件失败' });
+        });
+        res.on('close', () => {
+          if (!zipStream.destroyed) zipStream.destroy();
+          // 删除临时文件
+          fs.unlink(zipFilePath, (unlinkErr) => {
+            if (unlinkErr) console.error('删除临时zip文件失败:', unlinkErr);
+          });
+        });
+        // 在 pipe 完成后（响应结束）也尝试删除临时文件（安全兜底）
+        zipStream.on('end', () => {
+          fs.unlink(zipFilePath, (unlinkErr) => {
+            if (unlinkErr) console.error('删除临时zip文件失败:', unlinkErr);
+          });
+        });
+      } catch (statErr) {
+        console.error('读取zip文件信息失败:', statErr);
+        return res.status(500).json({ success: false, error: '发送zip文件失败' });
+      }
+    });
+    
+    // 监听错误
+    archive.on('error', function(err) {
+      console.error('压缩文件夹失败:', err);
+      res.status(500).json({ 
+        success: false, 
+        error: '压缩文件夹失败: ' + err.message 
+      });
+    });
+    
+    // 将存档数据通过管道传输到文件
+    archive.pipe(output);
+    
+    // 将目录添加到存档
+    archive.directory(resolvedPath, folderName);
+    
+    // 完成存档
+    archive.finalize();
+  } catch (error) {
+    console.error('文件夹下载失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: '文件夹下载失败: ' + error.message 
     });
   }
 });
@@ -745,30 +941,58 @@ app.get('/api/filesystem/list', authenticateToken, async (req, res) => {
     const { dirPath, showHidden } = req.query;
     let targetPath;
     
+    console.log('接收到目录请求，路径:', dirPath);
+    
     // 如果没有提供路径，则使用用户的主目录
     if (!dirPath) {
       targetPath = os.homedir();
+      console.log('未提供路径，使用主目录:', targetPath);
     } else {
-      // 确保路径在允许的范围内（基础安全检查）
-      targetPath = path.resolve(dirPath);
+      // 处理路径，确保格式正确
+      let processedPath = dirPath;
       
-      // 确保不会访问系统根目录以上的内容（简单防护）
-      const homeDir = os.homedir();
-      if (!targetPath.startsWith(homeDir) && targetPath !== homeDir) {
-        return res.status(403).json({ 
-          success: false, 
-          error: '访问被拒绝：只能访问用户主目录下的文件' 
-        });
+      // 确保路径在允许的范围内（基础安全检查）
+      targetPath = path.resolve(processedPath);
+      console.log('处理后的目标路径:', targetPath);
+      
+      // 检查是否为磁盘根路径（允许访问磁盘根路径）
+      const rootPath = path.parse(targetPath).root;
+      const isDiskRoot = targetPath === rootPath || targetPath === rootPath.slice(0, -1);
+      console.log('根路径检查:', { targetPath, rootPath, isDiskRoot });
+      
+      // 放宽安全限制，允许访问更多目录
+      // 如果不是磁盘根路径，则确保不会访问系统根目录以上的内容
+      if (!isDiskRoot) {
+        const homeDir = os.homedir();
+        // 移除对主目录的限制，允许访问应用程序目录
+        /*
+        if (!targetPath.startsWith(homeDir) && targetPath !== homeDir) {
+          return res.status(403).json({ 
+            success: false, 
+            error: '访问被拒绝：只能访问用户主目录下的文件' 
+          });
+        }
+        */
       }
     }
     
     // 检查路径是否存在
     try {
+      console.log('检查路径是否存在:', targetPath);
+      
+      // 确保路径末尾没有多余的斜杠（除了根目录）
+      if (targetPath !== '/' && targetPath.endsWith('/')) {
+        targetPath = targetPath.slice(0, -1);
+        console.log('移除末尾斜杠后的路径:', targetPath);
+      }
+      
       await fsPromises.access(targetPath);
+      console.log('路径存在，继续处理');
     } catch (err) {
+      console.error('路径不存在错误:', err);
       return res.status(404).json({ 
         success: false, 
-        error: '路径不存在' 
+        error: '路径不存在: ' + targetPath 
       });
     }
     
@@ -820,10 +1044,23 @@ app.get('/api/filesystem/list', authenticateToken, async (req, res) => {
 // 添加获取系统根目录的API
 app.get('/api/filesystem/root', authenticateToken, (req, res) => {
   try {
-    const homeDir = os.homedir();
+    // 根据平台返回更合适的根目录
+    // macOS (darwin) 上将根目录设为 '/'，以便可以访问主硬盘 (例如 Macintosh HD)
+    // Windows 上使用 C:\ 作为默认根
+    // 其他平台默认使用 / (可以根据需要调整为 /Volumes)
+    let rootDir;
+    if (process.platform === 'darwin') {
+      rootDir = '/';
+    } else if (process.platform === 'win32') {
+      rootDir = 'C:\\';
+    } else {
+      rootDir = '/';
+    }
+    console.log('返回根目录:', rootDir);
+    
     res.json({
       success: true,
-      homeDir: homeDir,
+      homeDir: rootDir,
       platform: process.platform
     });
   } catch (error) {
@@ -831,6 +1068,52 @@ app.get('/api/filesystem/root', authenticateToken, (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: '获取系统信息失败: ' + error.message 
+    });
+  }
+});
+
+// 添加获取系统磁盘列表的API
+app.get('/api/filesystem/disks', authenticateToken, async (req, res) => {
+  try {
+    console.log('获取磁盘列表请求');
+    const drivelist = require('drivelist');
+    const drives = await drivelist.list();
+    
+    console.log('原始磁盘信息:', JSON.stringify(drives, null, 2));
+    
+    // 格式化磁盘信息
+    const formattedDrives = drives.map(drive => {
+      // 获取挂载点（如果有多个，取第一个）
+      const mountPoint = drive.mountpoints && drive.mountpoints.length > 0 
+        ? drive.mountpoints[0].path 
+        : null;
+      
+      // 确保挂载点路径格式正确（以斜杠结尾）
+      const formattedMountPoint = mountPoint && !mountPoint.endsWith('/') 
+        ? mountPoint + '/' 
+        : mountPoint;
+      
+      return {
+        device: drive.device,
+        description: drive.description || drive.device,
+        size: drive.size,
+        mountPoint: formattedMountPoint,
+        isSystem: drive.system || false,
+        isProtected: drive.protected || false
+      };
+    }).filter(drive => drive.mountPoint); // 只返回有挂载点的磁盘
+    
+    console.log('格式化后的磁盘信息:', JSON.stringify(formattedDrives, null, 2));
+    
+    res.json({
+      success: true,
+      drives: formattedDrives
+    });
+  } catch (error) {
+    console.error('获取磁盘信息失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: '获取磁盘信息失败: ' + error.message 
     });
   }
 });

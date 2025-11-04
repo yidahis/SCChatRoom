@@ -18,8 +18,13 @@ const generateToken = (userId) => {
 // 验证JWT令牌中间件
 const authenticateToken = async (req, res, next) => {
   try {
+    // 支持从 Authorization header 或 query 参数 token 获取 JWT
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    let token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    if (!token && req.query && req.query.token) {
+      token = req.query.token;
+      console.log('从 query.token 中获取令牌');
+    }
     
     if (!token) {
       return res.status(401).json({ 

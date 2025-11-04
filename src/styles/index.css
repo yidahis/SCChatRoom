@@ -1285,43 +1285,115 @@ body {
   font-size: 0.9rem;
 }
 
-/* 移动端适配 */
+/* 磁盘选择器样式 */
+.disk-selector {
+  flex: 1;
+  padding: 1.5rem;
+  overflow-y: auto;
+}
+
+.disk-selector h4 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  color: #333;
+}
+
+.disk-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.disk-item {
+  display: flex;
+  align-items: center;
+  padding: 1rem;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.disk-item:hover {
+  border-color: #667eea;
+  background-color: #f8f9fa;
+}
+
+.disk-icon {
+  font-size: 1.5rem;
+  margin-right: 0.75rem;
+}
+
+.disk-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.disk-mount {
+  font-weight: 600;
+  font-size: 1rem;
+  margin-bottom: 0.25rem;
+}
+
+.disk-description {
+  font-size: 0.8rem;
+  color: #666;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.disk-size {
+  font-size: 0.875rem;
+  color: #666;
+  white-space: nowrap;
+}
+
+/* 响应式设计 */
 @media (max-width: 768px) {
-  .file-list-modal {
-    max-width: 95vw;
-    max-height: 90vh;
-    margin: 1rem;
+  .file-browser-modal {
+    width: 95%;
+    height: 90%;
   }
   
-  .file-list-header,
-  .file-list-footer {
-    padding: 1rem 1.5rem;
-  }
-  
-  .file-list-content {
-    padding: 1.5rem;
-  }
-  
-  .files-grid {
-    grid-template-columns: 1fr;
-    gap: 0.75rem;
-  }
-  
-  .file-item {
-    padding: 0.75rem;
-  }
-  
-  .file-icon {
-    font-size: 1.5rem;
-  }
-  
-  .file-name {
-    font-size: 0.85rem;
-  }
-  
-  .file-details {
+  .file-browser-path {
     flex-direction: column;
-    gap: 0.25rem;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+  
+  .disk-selector-toggle {
+    align-self: flex-end;
+  }
+  
+  .file-list-header {
+    display: none;
+  }
+  
+  .file-list-item {
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1rem;
+  }
+  
+  .file-list-item-name {
+    flex: none;
+  }
+  
+  .file-list-item-size, 
+  .file-list-item-modified {
+    flex: none;
+    justify-content: space-between;
+  }
+  
+  .file-browser-footer {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: stretch;
+  }
+  
+  .footer-controls, .footer-actions {
+    justify-content: center;
   }
 }
 
@@ -1332,49 +1404,49 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background-color: rgba(0, 0, 0, 0.5);
   display: flex;
-  align-items: center;
   justify-content: center;
+  align-items: center;
   z-index: 1000;
-  backdrop-filter: blur(4px);
 }
 
 .file-browser-modal {
   background: white;
-  border-radius: 16px;
+  border-radius: 8px;
   width: 90%;
-  max-width: 800px;
-  height: 80vh;
+  height: 80%;
+  max-width: 1200px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
-  animation: modalSlideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-@keyframes modalSlideIn {
-  from {
-    opacity: 0;
-    transform: translateY(-20px) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
 }
 
 .file-browser-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1.5rem;
+  padding: 16px 24px;
   border-bottom: 1px solid #eee;
 }
 
 .file-browser-header h3 {
-  font-size: 1.25rem;
+  margin: 0;
+  font-size: 18px;
   font-weight: 600;
-  color: #333;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  color: #666;
+}
+
+.close-btn:hover {
+  background-color: #f5f5f5;
 }
 
 .file-browser-content {
@@ -1385,32 +1457,34 @@ body {
 }
 
 .file-browser-path {
-  padding: 1rem 1.5rem;
-  background: #f8f9fa;
+  padding: 12px 24px;
   border-bottom: 1px solid #eee;
-  font-size: 0.9rem;
-  color: #666;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .path-controls {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 12px;
+  flex: 1;
 }
 
 .back-btn {
   background: none;
   border: none;
   cursor: pointer;
-  padding: 0.25rem;
+  padding: 6px;
   border-radius: 4px;
+  color: #666;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .back-btn:hover:not(:disabled) {
-  background: #e9ecef;
+  background-color: #f5f5f5;
 }
 
 .back-btn:disabled {
@@ -1419,44 +1493,158 @@ body {
 }
 
 .current-path {
-  flex: 1;
+  font-family: monospace;
+  font-size: 14px;
+  color: #666;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+}
+
+.disk-selector-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 4px;
+  color: #666;
+}
+
+.disk-selector-toggle:hover {
+  background-color: #f5f5f5;
+}
+
+.loading, .error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 24px;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #f3f3f3;
+  border-top: 3px solid #007bff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.error button {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.error button:hover {
+  background-color: #0056b3;
+}
+
+/* 磁盘选择器样式 */
+.disk-selector {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.disk-selector h4 {
+  margin-top: 0;
+  margin-bottom: 16px;
+  color: #333;
+}
+
+.disk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.disk-item {
+  display: flex;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.disk-item:hover {
+  border-color: #007bff;
+  background-color: #f8f9fa;
+}
+
+.disk-icon {
+  font-size: 24px;
+  margin-right: 16px;
+}
+
+.disk-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.disk-mount {
+  font-weight: 600;
+  font-size: 16px;
+  margin-bottom: 4px;
+}
+
+.disk-description {
+  font-size: 14px;
+  color: #666;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.disk-size {
+  font-size: 16px;
+  font-weight: 500;
+  color: #333;
   white-space: nowrap;
 }
 
+/* 文件列表样式 */
 .file-browser-list {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  overflow: hidden;
 }
 
 .file-list-header {
   display: flex;
-  padding: 0.75rem 1.5rem;
-  background: #f8f9fa;
+  padding: 8px 24px;
+  background-color: #f8f9fa;
   border-bottom: 1px solid #eee;
   font-weight: 600;
-  font-size: 0.85rem;
+  font-size: 14px;
 }
 
 .file-list-header-item {
-  color: #666;
+  padding: 0 8px;
 }
 
-.file-list-header-item.name {
+.file-list-header .name {
   flex: 2;
 }
 
-.file-list-header-item.size {
+.file-list-header .size, 
+.file-list-header .modified {
   flex: 1;
-  text-align: right;
-}
-
-.file-list-header-item.modified {
-  flex: 1;
-  text-align: right;
-  padding-right: 1.5rem;
 }
 
 .file-list-content {
@@ -1466,172 +1654,147 @@ body {
 
 .file-list-item {
   display: flex;
-  align-items: center;
-  padding: 0.75rem 1.5rem;
-  border-bottom: 1px solid #f0f0f0;
+  padding: 10px 24px;
+  border-bottom: 1px solid #f5f5f5;
   cursor: pointer;
-  transition: background-color 0.2s ease;
+  transition: background-color 0.2s;
 }
 
 .file-list-item:hover {
-  background: #f0f5ff;
+  background-color: #f8f9fa;
 }
 
-.file-list-item.directory:hover {
-  background: #f0f8f0;
+.file-list-item.directory {
+  font-weight: 500;
 }
 
 .file-list-item-name {
   display: flex;
   align-items: center;
   flex: 2;
-  gap: 0.75rem;
+  min-width: 0;
 }
 
 .file-icon {
-  font-size: 1.25rem;
+  margin-right: 12px;
+  font-size: 16px;
 }
 
 .file-name {
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.file-list-item-size, 
+.file-list-item-modified {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  font-size: 14px;
+  color: #666;
 }
 
 .file-list-item-size {
-  flex: 1;
-  text-align: right;
-  font-size: 0.9rem;
-  color: #666;
-}
-
-.file-list-item-modified {
-  flex: 1;
-  text-align: right;
-  font-size: 0.9rem;
-  color: #666;
-  padding-right: 1.5rem;
+  white-space: nowrap;
 }
 
 .file-browser-footer {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.5rem;
+  align-items: center;
+  padding: 16px 24px;
   border-top: 1px solid #eee;
-  background: #f8f9fa;
 }
 
 .footer-controls {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  gap: 8px;
 }
 
 .footer-actions {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 16px;
 }
 
-.toggle-hidden-btn {
+.refresh-btn, .select-files-btn, .toggle-hidden-btn {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  background: white;
-  color: #333;
+  gap: 6px;
+  background: none;
   border: 1px solid #ddd;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: 4px;
   cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.toggle-hidden-btn:hover {
-  background: #f0f0f0;
-  border-color: #ccc;
-}
-
-.toggle-hidden-btn.active {
-  background: #667eea;
-  color: white;
-  border-color: #667eea;
-}
-
-.toggle-hidden-btn.active:hover {
-  background: #5a6fd8;
-  border-color: #5a6fd8;
-}
-
-.toggle-hidden-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-.refresh-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  background: white;
+  font-size: 14px;
   color: #333;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.3s ease;
 }
 
-.refresh-btn:hover:not(:disabled) {
-  background: #f0f0f0;
-  border-color: #ccc;
+.refresh-btn:hover, .select-files-btn:hover, .toggle-hidden-btn:hover {
+  background-color: #f8f9fa;
 }
 
 .refresh-btn:disabled {
-  opacity: 0.7;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
-.refresh-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-.select-files-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+.toggle-hidden-btn.active {
+  background-color: #007bff;
   color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.select-files-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-}
-
-.select-files-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.select-files-btn svg {
-  width: 16px;
-  height: 16px;
+  border-color: #007bff;
 }
 
 .file-count {
-  font-size: 0.9rem;
+  font-size: 14px;
   color: #666;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .file-browser-modal {
+    width: 95%;
+    height: 90%;
+  }
+  
+  .file-browser-path {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  
+  .disk-selector-toggle {
+    align-self: flex-end;
+  }
+  
+  .file-list-header {
+    display: none;
+  }
+  
+  .file-list-item {
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 16px;
+  }
+  
+  .file-list-item-name {
+    flex: none;
+  }
+  
+  .file-list-item-size, 
+  .file-list-item-modified {
+    flex: none;
+    justify-content: space-between;
+  }
+  
+  .file-browser-footer {
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
+  
+  .footer-controls, .footer-actions {
+    justify-content: center;
+  }
 }
