@@ -12,8 +12,9 @@ const fsPromises = require('fs').promises; // 使用Promise版本
 const archiver = require('archiver'); // 用于文件夹压缩
 
 // 导入数据库和模型
-const { connectDB, isUsingMemoryStorage, memoryUserOperations } = require('./config/database');
+const { connectDB, isUsingMemoryStorage, memoryUserOperations, memoryMessageOperations } = require('./config/database');
 const { router: authRouter, authenticateToken } = require('./routes/auth');
+const Message = require('./models/Message');
 
 const app = express();
 const server = http.createServer(app);
@@ -543,6 +544,39 @@ io.on('connection', async (socket) => {
     // 加入全局聊天室
     socket.join('global-chat');
     
+    // 发送历史消息给新用户
+    try {
+      let recentMessages;
+      
+      if (isUsingMemoryStorage()) {
+        // 从内存存储获取最近的消息
+        recentMessages = await memoryMessageOperations.findRecent(50);
+      } else {
+        // 从数据库获取最近的消息
+        recentMessages = await Message.find().sort({ timestamp: 1 }).limit(50);
+      }
+      
+      // 发送历史消息给新加入的用户
+      recentMessages.forEach(msg => {
+        socket.emit('message', {
+          id: msg._id,
+          type: msg.type,
+          content: msg.content,
+          imageUrl: msg.imageUrl,
+          fileUrl: msg.fileUrl,
+          filename: msg.filename,
+          originalName: msg.originalName,
+          size: msg.size,
+          mimetype: msg.mimetype,
+          user: msg.user,
+          timestamp: msg.timestamp,
+          isHistory: true
+        });
+      });
+    } catch (error) {
+      console.error('获取历史消息失败:', error);
+    }
+    
     // 发送欢迎消息给新用户
     socket.emit('message', {
       id: Date.now() + Math.random(),
@@ -645,6 +679,43 @@ io.on('connection', async (socket) => {
         messageData.content = data.message || ''; // 可选的文件描述
       } else {
         messageData.content = data.message.trim();
+      }
+
+      // 保存消息到数据库或内存
+      try {
+        if (isUsingMemoryStorage()) {
+          // 保存到内存
+          await memoryMessageOperations.save({
+            _id: messageData.id,
+            user: messageData.user,
+            content: messageData.content,
+            type: messageData.type,
+            imageUrl: messageData.imageUrl,
+            fileUrl: messageData.fileUrl,
+            filename: messageData.filename,
+            originalName: messageData.originalName,
+            size: messageData.size,
+            mimetype: messageData.mimetype,
+            timestamp: messageData.timestamp
+          });
+        } else {
+          // 保存到数据库
+          await Message.create({
+            user: messageData.user,
+            content: messageData.content,
+            type: messageData.type,
+            imageUrl: messageData.imageUrl,
+            fileUrl: messageData.fileUrl,
+            filename: messageData.filename,
+            originalName: messageData.originalName,
+            size: messageData.size,
+            mimetype: messageData.mimetype,
+            timestamp: messageData.timestamp
+          });
+        }
+      } catch (saveError) {
+        console.error('保存消息失败:', saveError);
+        // 继续发送消息，即使保存失败
       }
 
       // 广播消息给全局聊天室的所有用户

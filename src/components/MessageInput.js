@@ -15,6 +15,7 @@ function MessageInput({ onSendMessage }) {
   const generalFileInputRef = useRef(null);
   const uploadStartTimeRef = useRef(null);
   const perFileUploadedRef = useRef({});
+  const messageInputRef = useRef(null);
 
   // 格式化文件大小
   const formatFileSize = (bytes) => {
@@ -47,6 +48,37 @@ function MessageInput({ onSendMessage }) {
     setTotalBytes(0);
     uploadStartTimeRef.current = null;
     perFileUploadedRef.current = {};
+  };
+
+  // 处理粘贴事件：从剪贴板中提取图片
+  const handlePaste = async (e) => {
+    if (!e.clipboardData) return;
+
+    const items = e.clipboardData.items;
+    if (!items) return;
+
+    const imageFiles = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      // 检查是否为图片类型
+      if (item.type.indexOf('image') !== -1) {
+        const file = item.getAsFile();
+        if (file) {
+          imageFiles.push(file);
+        }
+      }
+    }
+
+    // 如果粘贴板中有图片，自动上传
+    if (imageFiles.length > 0) {
+      e.preventDefault(); // 阻止默认粘贴行为（避免粘贴图片的 URL 或其他表示）
+      const token = localStorage.getItem('token');
+      if (token) {
+        await uploadMultipleFiles(imageFiles, 'image', token);
+      } else {
+        alert('请先登录');
+      }
+    }
   };
 
   const handleSubmit = (e) => {
@@ -414,10 +446,12 @@ function MessageInput({ onSendMessage }) {
           )}
         </button>
         <input
+          ref={messageInputRef}
           type="text"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyPress={handleKeyPress}
+          onPaste={handlePaste}
           placeholder="输入消息..."
           maxLength="500"
           autoComplete="off"
