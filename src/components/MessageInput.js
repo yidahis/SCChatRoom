@@ -1,4 +1,10 @@
 import React, { useState, useRef } from 'react';
+import SparkMD5 from 'spark-md5';
+
+// 获取后端服务器地址,绕过webpack代理
+const BACKEND_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://localhost:3678'
+  : `http://${window.location.hostname}:3678`;
 
 function MessageInput({ onSendMessage }) {
   const [message, setMessage] = useState('');
@@ -11,6 +17,7 @@ function MessageInput({ onSendMessage }) {
   const [uploadQueue, setUploadQueue] = useState([]);
   const [currentUploadIndex, setCurrentUploadIndex] = useState(0);
   const [uploadResults, setUploadResults] = useState([]);
+  const [showUploadSummary, setShowUploadSummary] = useState(false);
   const fileInputRef = useRef(null);
   const generalFileInputRef = useRef(null);
   const uploadStartTimeRef = useRef(null);
@@ -37,6 +44,85 @@ function MessageInput({ onSendMessage }) {
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = Math.round(seconds % 60);
     return `${minutes}分${remainingSeconds}秒`;
+  };
+
+  // 从文件名中提取 hash 值
+  const extractHashFromFilename = (filename) => {
+    // 匹配 "-[32位hex]" 模式（在扩展名之前）
+    const hashPattern = /-([a-f0-9]{32})(?=\.[^.]*$)/i;
+    const match = filename.match(hashPattern);
+    return match ? match[1] : null;
+  };
+
+  // 计算文件的 MD5 哈希值
+  const calculateFileHash = async (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      const spark = new SparkMD5.ArrayBuffer();
+
+      reader.onload = (e) => {
+        try {
+          spark.append(e.target.result);
+          const hash = spark.end();
+          resolve(hash);
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      reader.onerror = () => {
+        reject(new Error('读取文件失败'));
+      };
+
+      // 分块读取大文件，避免内存溢出
+      const chunkSize = 2 * 1024 * 1024; // 2MB
+      const chunks = Math.ceil(file.size / chunkSize);
+      let currentChunk = 0;
+
+      const loadNext = () => {
+        const start = currentChunk * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
+        const slice = file.slice(start, end);
+
+        reader.onload = (e) => {
+          spark.append(e.target.result);
+          currentChunk++;
+
+          if (currentChunk < chunks) {
+            // 使用 setTimeout 避免阻塞 UI
+            setTimeout(loadNext, 0);
+          } else {
+            const hash = spark.end();
+            resolve(hash);
+          }
+        };
+
+        reader.readAsArrayBuffer(slice);
+      };
+
+      loadNext();
+    });
+  };
+
+  // 检查文件是否已存在
+  const checkFileExists = async (hash, token) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/check-file-hash?hash=${hash}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('检查文件存在性失败:', error);
+      return { success: false, exists: false };
+    }
   };
 
   // 重置上传状态
@@ -178,7 +264,11 @@ function MessageInput({ onSendMessage }) {
               results[current] = res;
             })
             .catch((err) => {
-              results[current] = { success: false, error: err?.message || String(err) };
+              results[current] = {
+                success: false,
+                error: err?.message || String(err) || '上传失败',
+                fileName: items[current]?.name
+              };
             })
             .finally(() => {
               activeCount--;
@@ -201,125 +291,196 @@ function MessageInput({ onSendMessage }) {
     setUploadQueue(files);
     setCurrentUploadIndex(0);
     setUploadResults([]);
-    
+
     // 先重置状态，再设置总大小
     resetUploadState();
     const totalSize = files.reduce((sum, file) => sum + file.size, 0);
     setTotalBytes(totalSize);
     uploadStartTimeRef.current = Date.now();
     perFileUploadedRef.current = {};
-    
+
     const concurrency = 4; // 受控并发数
 
-    try {
-      const results = await runWithConcurrency(files, concurrency, async (file, index) => {
-        console.log(`🔄 上传文件 ${index + 1}/${files.length}: ${file.name}`);
-        const result = await uploadSingleFile(file, type, token, index, totalSize);
-        if (result?.success) {
-          if (type === 'image') {
-            onSendMessage({
-              type: 'image',
-              imageUrl: result.imageUrl,
-              message: ''
-            });
-          } else {
-            onSendMessage({
-              type: 'file',
-              fileUrl: result.fileUrl,
-              filename: result.filename,
-              originalName: result.originalName,
-              size: result.size,
-              mimetype: result.mimetype,
-              message: ''
-            });
-          }
+    const results = await runWithConcurrency(files, concurrency, async (file, index) => {
+      console.log(`🔄 上传文件 ${index + 1}/${files.length}: ${file.name}`);
+      const result = await uploadSingleFile(file, type, token, index, totalSize);
+      if (result?.success) {
+        if (type === 'image') {
+          onSendMessage({
+            type: 'image',
+            imageUrl: result.imageUrl,
+            message: ''
+          });
+        } else {
+          onSendMessage({
+            type: 'file',
+            fileUrl: result.fileUrl,
+            filename: result.filename,
+            originalName: result.originalName,
+            size: result.size,
+            mimetype: result.mimetype,
+            message: ''
+          });
         }
-        return result;
-      });
-
-      setUploadResults(results);
-
-      const successCount = results.filter(r => r && r.success).length;
-      const failCount = results.length - successCount;
-      if (failCount === 0) {
-        console.log(`✅ 所有文件上传成功 (${successCount}/${results.length})`);
-      } else {
-        alert(`上传完成：${successCount} 个成功，${failCount} 个失败`);
       }
+      return result;
+    });
 
-    } catch (error) {
-      console.error('💥 多文件上传异常:', error);
-      alert(`文件上传失败: ${error.message}`);
-    } finally {
-      setIsUploading(false);
-      resetUploadState();
-      setUploadQueue([]);
-      setCurrentUploadIndex(0);
-    }
+    // 填充结果中的 fileName
+    const finalResults = results.map((result, index) => ({
+      ...result,
+      fileName: result.fileName || files[index]?.name
+    }));
+
+    setUploadResults(finalResults);
+
+    // 显示上传结果清单
+    setShowUploadSummary(true);
+
+    setIsUploading(false);
+    resetUploadState();
+    setUploadQueue([]);
+    setCurrentUploadIndex(0);
+  };
+
+  // 关闭上传结果清单
+  const closeUploadSummary = () => {
+    setShowUploadSummary(false);
+    setUploadResults([]);
   };
   
   // 单文件上传函数（带全局进度聚合）
   const uploadSingleFile = async (file, type, token, fileIndex, totalBytesValue) => {
-    return new Promise((resolve) => {
-      const formData = new FormData();
-      const fieldName = type === 'image' ? 'image' : 'file';
-      const endpoint = type === 'image' ? '/api/upload/image' : '/api/upload/file';
-      formData.append(fieldName, file);
+    try {
+      // 尝试从文件名中提取 hash
+      const filenameHash = extractHashFromFilename(file.name);
+      let fileHash;
 
-      const xhr = new XMLHttpRequest();
+      if (filenameHash) {
+        // 文件名包含 hash，直接使用
+        fileHash = filenameHash;
+        console.log(`✅ [前端] 从文件名提取hash: ${file.name} → ${fileHash}`);
+      } else {
+        // 文件名不包含 hash，需要计算
+        console.log(`🔍 [前端] 开始计算文件hash: ${file.name} (${formatFileSize(file.size)})`);
+        fileHash = await calculateFileHash(file);
+        console.log(`✅ [前端] 文件hash计算完成: ${fileHash}`);
+      }
 
-      const updateAggregatedProgress = (bytesForThisFile) => {
-        perFileUploadedRef.current[fileIndex] = bytesForThisFile;
+      // 检查文件是否已存在
+      console.log(`🔍 [前端] 检查文件是否已存在...`);
+      const checkResult = await checkFileExists(fileHash, token);
+
+      if (checkResult.success && checkResult.exists) {
+        // 文件已存在，直接使用已有文件
+        console.log(`✅ [前端] 文件已存在，跳过上传: ${file.name}`);
+        const result = {
+          success: true,
+          isDuplicate: true,
+          fileUrl: checkResult.fileUrl,
+          filename: checkResult.filename,
+          originalName: checkResult.originalName,
+          size: checkResult.size,
+          mimetype: file.type,
+          message: '文件已存在，使用已有文件',
+          fileName: file.name
+        };
+
+        // 更新进度
+        perFileUploadedRef.current[fileIndex] = file.size;
         const sumUploaded = Object.values(perFileUploadedRef.current).reduce((s, v) => s + (v || 0), 0);
         setUploadedBytes(sumUploaded);
         const progress = totalBytesValue > 0 ? (sumUploaded / totalBytesValue) * 100 : 0;
         setUploadProgress(progress);
 
-        const currentTime = Date.now();
-        const elapsedTime = (currentTime - (uploadStartTimeRef.current || currentTime)) / 1000;
-        if (elapsedTime > 0) {
-          const speed = sumUploaded / elapsedTime;
-          setUploadSpeed(speed);
-          const remaining = Math.max((totalBytesValue - sumUploaded) / (speed || 1), 0);
-          setRemainingTime(remaining);
-        }
-      };
+        return result;
+      }
 
-      // 监听上传进度
-      xhr.upload.addEventListener('progress', (event) => {
-        if (event.lengthComputable) {
-          updateAggregatedProgress(event.loaded);
-        }
-      });
-      
-      xhr.onload = () => {
-        try {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            const result = JSON.parse(xhr.responseText);
-            // 确保最终计入该文件完整大小
-            updateAggregatedProgress(file.size);
-            resolve(result);
-          } else {
-            resolve({ success: false, error: `HTTP ${xhr.status}`, fileName: file.name });
+      // 文件不存在，执行上传
+      console.log(`📤 [前端] 文件不存在，开始上传: ${file.name}`);
+
+      return new Promise((resolve) => {
+        const formData = new FormData();
+        const fieldName = type === 'image' ? 'image' : 'file';
+        const endpoint = type === 'image' ? '/api/upload/image' : '/api/upload/file';
+        // 使用完整后端URL,绕过webpack代理
+        const fullUrl = `${BACKEND_URL}${endpoint}`;
+        formData.append(fieldName, file);
+
+        const xhr = new XMLHttpRequest();
+
+        const updateAggregatedProgress = (bytesForThisFile) => {
+          perFileUploadedRef.current[fileIndex] = bytesForThisFile;
+          const sumUploaded = Object.values(perFileUploadedRef.current).reduce((s, v) => s + (v || 0), 0);
+          setUploadedBytes(sumUploaded);
+          const progress = totalBytesValue > 0 ? (sumUploaded / totalBytesValue) * 100 : 0;
+          setUploadProgress(progress);
+
+          const currentTime = Date.now();
+          const elapsedTime = (currentTime - (uploadStartTimeRef.current || currentTime)) / 1000;
+          if (elapsedTime > 0) {
+            const speed = sumUploaded / elapsedTime;
+            setUploadSpeed(speed);
+            const remaining = Math.max((totalBytesValue - sumUploaded) / (speed || 1), 0);
+            setRemainingTime(remaining);
           }
-        } catch (e) {
-          resolve({ success: false, error: '响应解析失败', fileName: file.name });
+        };
+
+        // 监听上传进度
+        xhr.upload.addEventListener('progress', (event) => {
+          if (event.lengthComputable) {
+            updateAggregatedProgress(event.loaded);
+          }
+        });
+        
+        xhr.onload = () => {
+          try {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              const result = JSON.parse(xhr.responseText);
+              // 确保最终计入该文件完整大小
+              updateAggregatedProgress(file.size);
+              resolve({ ...result, fileName: file.name });
+            } else {
+              resolve({ success: false, error: `HTTP ${xhr.status}`, fileName: file.name });
+            }
+          } catch (e) {
+            resolve({ success: false, error: '响应解析失败', fileName: file.name });
+          }
+        };
+        
+        xhr.onerror = () => {
+          resolve({ success: false, error: '网络错误', fileName: file.name });
+        };
+
+        xhr.ontimeout = () => {
+          resolve({ success: false, error: '上传超时', fileName: file.name });
+        };
+
+        xhr.open('POST', fullUrl);
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        xhr.withCredentials = false; // 绕过CORS预检
+
+        // 对于文件上传，将 hash 作为额外的字段发送
+        if (type === 'file') {
+          formData.append('hash', fileHash);
         }
-      };
-      
-      xhr.onerror = () => {
-        resolve({ success: false, error: '网络错误', fileName: file.name });
-      };
-      
-      xhr.ontimeout = () => {
-        resolve({ success: false, error: '上传超时', fileName: file.name });
-      };
-      
-      xhr.open('POST', endpoint);
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-      xhr.timeout = 300000; // 5分钟超时
-      xhr.send(formData);
-    });
+
+        // 根据文件大小动态设置超时时间
+        // 基础5分钟 + 每MB增加1秒,最大2小时
+        const fileSizeMB = file.size / (1024 * 1024);
+        const baseTimeout = 5 * 60 * 1000; // 5分钟
+        const additionalTimeout = Math.min(fileSizeMB * 1000, 115 * 60 * 1000); // 最多再加115分钟
+        const dynamicTimeout = baseTimeout + additionalTimeout;
+        xhr.timeout = dynamicTimeout; // 动态超时时间
+
+        console.log(`⏱️ [前端] 文件: ${file.name}, 大小: ${formatFileSize(file.size)}, 超时设置: ${(dynamicTimeout / 60000).toFixed(1)}分钟, 直接访问后端: ${fullUrl}`);
+
+        xhr.send(formData);
+      });
+    } catch (error) {
+      console.error('❌ [前端] 文件上传失败:', error);
+      return { success: false, error: error.message, fileName: file.name };
+    }
   };
 
   const handleImageButtonClick = () => {
@@ -373,6 +534,61 @@ function MessageInput({ onSendMessage }) {
           </div>
         </div>
       )}
+
+      {/* 上传结果清单 */}
+      {showUploadSummary && uploadResults.length > 0 && (
+        <div className="upload-summary-container">
+          <div className="upload-summary-header">
+            <div className="upload-summary-title">
+              上传完成
+              <span className="upload-summary-count">
+                {uploadResults.filter(r => r && r.success).length}/{uploadResults.length}
+              </span>
+            </div>
+            <button className="upload-summary-close" onClick={closeUploadSummary}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+            </button>
+          </div>
+          <div className="upload-summary-list">
+            {uploadResults.map((result, index) => {
+              const file = uploadQueue[index];
+              const fileName = result.fileName || file?.name || `文件 ${index + 1}`;
+
+              return (
+                <div key={index} className={`upload-summary-item ${result.success ? 'success' : 'failed'}`}>
+                  <div className="upload-item-icon">
+                    {result.success ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                        <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                      </svg>
+                    )}
+                  </div>
+                  <div className="upload-item-info">
+                    <div className="upload-item-name" title={fileName}>{fileName}</div>
+                    <div className="upload-item-status">
+                      {result.success ? (
+                        result.isDuplicate ? '已存在（使用缓存）' : '上传成功'
+                      ) : (
+                        result.error || '上传失败'
+                      )}
+                    </div>
+                  </div>
+                  {file && (
+                    <div className="upload-item-size">{formatFileSize(file.size)}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="input-container">
         <input
           type="file"

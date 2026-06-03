@@ -42,16 +42,22 @@ module.exports = {
     proxy: [
       {
         context: ['/socket.io'],
-        target: 'http://0.0.0.0:3678',
-        ws: true
+        target: 'http://localhost:3678',
+        ws: true,
+        changeOrigin: true,
+        timeout: 2 * 60 * 60 * 1000 // 2小时超时
       },
       {
         context: ['/api'],
-        target: 'http://0.0.0.0:3678'
+        target: 'http://localhost:3678',
+        changeOrigin: true,
+        timeout: 2 * 60 * 60 * 1000 // 2小时超时
       },
       {
         context: ['/uploads'],
-        target: 'http://0.0.0.0:3678'
+        target: 'http://localhost:3678',
+        changeOrigin: true,
+        timeout: 2 * 60 * 60 * 1000 // 2小时超时
       }
     ]
   },

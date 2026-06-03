@@ -3,7 +3,9 @@ const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const session = require('express-session');
+const cookieParser = require('cookie-parser'); // 添加cookie-parser
 const MongoStore = require('connect-mongo');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
@@ -18,32 +20,63 @@ const Message = require('./models/Message');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
+
+// Socket.IO CORS 配置函数 - 动态验证origin
+const socketCorsConfig = {
+  origin: true, // 允许所有来源（LAN工具需要支持任意局域网IP访问）
+  methods: ["GET", "POST"],
+  credentials: true // 允许携带凭证（Cookie）
+};
+
+const io = socketIo(server, { cors: socketCorsConfig });
 
 const PORT = process.env.PORT || 3678;
 const JWT_SECRET = process.env.JWT_SECRET || 'wjairdrop_secret_key_2024';
 
 // 连接数据库
-connectDB().then(() => {
+connectDB().then(async () => {
     if (isUsingMemoryStorage()) {
         console.log('✅ 应用启动成功 - 使用内存存储模式');
         console.log('⚠️  注意：用户数据将在服务器重启后丢失');
     } else {
         console.log('✅ 应用启动成功 - 使用MongoDB存储');
     }
+    
+    // 初始化文件哈希缓存
+    await initializeFileHashCache();
 }).catch(err => {
     console.error('数据库连接失败，但应用将继续运行:', err.message);
 });
 
-// 中间件配置 - 支持大文件上传
+// 中间件配置 - 支持大文件上传和CORS
 console.log('⚙️ [后端] 配置Express中间件 - 请求体大小限制: 无限制');
+console.log('⚙️ [后端] 配置CORS - 允许跨域请求');
+app.use(cookieParser()); // 添加Cookie解析中间件
 app.use(express.json({ limit: '50gb' }));
 app.use(express.urlencoded({ extended: true, limit: '50gb' }));
+
+// CORS中间件
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  
+  if (origin) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
+  
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// 增加服务器超时时间，支持大文件上传
+const serverTimeout = 2 * 60 * 60 * 1000; // 2小时
+server.timeout = serverTimeout;
+console.log(`⚙️ [后端] 服务器超时设置: ${serverTimeout / 60000}分钟`);
 
 // 配置会话中间件（仅在MongoDB可用时使用MongoStore）
 const sessionConfig = {
@@ -74,10 +107,118 @@ app.use(session(sessionConfig));
 // API路由
 app.use('/api/auth', authRouter);
 
+// 文件 hash 检查接口
+app.get('/api/check-file-hash', authenticateToken, async (req, res) => {
+  try {
+    const { hash } = req.query;
+    
+    if (!hash) {
+      return res.status(400).json({ 
+        success: false, 
+        error: '缺少 hash 参数' 
+      });
+    }
+    
+    console.log('🔍 [后端] 检查文件hash:', hash);
+    
+    // 在缓存中查找匹配的文件
+    let existingFile = null;
+    for (const [filename, cachedHash] of fileHashCache.entries()) {
+      if (cachedHash === hash) {
+        existingFile = filename;
+        break;
+      }
+    }
+    
+    if (existingFile) {
+      // 找到相同文件，返回文件信息
+      const existingFilePath = path.join(uploadsDir, existingFile);
+      const existingStats = await fsPromises.stat(existingFilePath);
+      
+      // 解析原始文件名
+      const ext = path.extname(existingFile);
+      const baseName = path.basename(existingFile, ext);
+      const originalName = baseName.split('-').slice(0, -1).join('-') + ext;
+      
+      console.log('✅ [后端] 找到重复文件:', existingFile);
+      res.json({
+        success: true,
+        exists: true,
+        fileUrl: `/uploads/${existingFile}`,
+        filename: existingFile,
+        originalName: originalName,
+        size: existingStats.size
+      });
+    } else {
+      console.log('❌ [后端] 未找到相同hash的文件');
+      res.json({
+        success: true,
+        exists: false
+      });
+    }
+  } catch (error) {
+    console.error('❌ [后端] 检查文件hash失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: '检查文件hash失败: ' + error.message 
+    });
+  }
+});
+
 // 创建uploads目录
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// 初始化文件哈希缓存
+async function initializeFileHashCache() {
+  try {
+    console.log('🔄 [后端] 正在初始化文件哈希缓存...');
+    
+    // 首先尝试从缓存文件加载
+    const loadedCount = await loadHashCache();
+    
+    // 获取uploads目录下的所有文件
+    const files = await fsPromises.readdir(uploadsDir);
+    const cachedFiles = new Set(fileHashCache.keys());
+    
+    let newCount = 0;
+    for (const filename of files) {
+      // 跳过已经缓存的文件
+      if (cachedFiles.has(filename)) {
+        continue;
+      }
+      
+      const filePath = path.join(uploadsDir, filename);
+      const stats = await fsPromises.stat(filePath);
+      
+      // 只处理文件，跳过目录
+      if (stats.isFile()) {
+        try {
+          const hash = await calculateFileHash(filePath);
+          fileHashCache.set(filename, hash);
+          newCount++;
+          console.log(`✅ [后端] 计算新文件哈希: ${filename} -> ${hash}`);
+        } catch (hashError) {
+          console.error(`❌ [后端] 计算 ${filename} 哈希失败:`, hashError.message);
+        }
+      }
+    }
+    
+    const totalCount = fileHashCache.size;
+    console.log(`🎉 [后端] 文件哈希缓存初始化完成:`);
+    console.log(`   - 从缓存文件加载: ${loadedCount} 个`);
+    console.log(`   - 新计算: ${newCount} 个`);
+    console.log(`   - 总计: ${totalCount} 个`);
+    
+    // 如果有新计算的hash，保存到缓存文件
+    if (newCount > 0) {
+      await saveHashCache();
+    }
+  } catch (error) {
+    console.error('❌ [后端] 初始化文件哈希缓存失败:', error);
+  }
 }
 
 // 配置multer用于文件上传
@@ -114,9 +255,18 @@ const storage = multer.diskStorage({
   }
 });
 
+// Multer 通用配置 - 支持大文件上传
+const multerConfig = {
+  storage: storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024 * 1024, // 50GB
+    fieldSize: 10 * 1024 * 1024, // 10MB
+  }
+};
+
 // 图片上传配置
 const imageUpload = multer({
-  storage: storage,
+  ...multerConfig,
 
   fileFilter: function (req, file, cb) {
     // 只允许图片文件
@@ -128,21 +278,80 @@ const imageUpload = multer({
   }
 });
 
+// 文件哈希缓存 - 存储已上传文件的哈希值 { filename: hash }
+const fileHashCache = new Map();
+
+// Hash缓存文件路径
+const hashCacheFile = path.join(__dirname, '.file-hash-cache.json');
+
+// 保存哈希缓存到文件
+async function saveHashCache() {
+  try {
+    const cacheObject = Object.fromEntries(fileHashCache);
+    await fsPromises.writeFile(
+      hashCacheFile,
+      JSON.stringify(cacheObject, null, 2),
+      'utf8'
+    );
+    console.log('💾 [后端] Hash缓存已保存到文件');
+  } catch (error) {
+    console.error('❌ [后端] 保存Hash缓存失败:', error);
+  }
+}
+
+// 从文件加载哈希缓存
+async function loadHashCache() {
+  try {
+    if (fs.existsSync(hashCacheFile)) {
+      const cacheData = await fsPromises.readFile(hashCacheFile, 'utf8');
+      const cacheObject = JSON.parse(cacheData);
+      
+      // 验证缓存中的文件是否仍然存在
+      let validCount = 0;
+      for (const [filename, hash] of Object.entries(cacheObject)) {
+        const filePath = path.join(uploadsDir, filename);
+        if (fs.existsSync(filePath)) {
+          fileHashCache.set(filename, hash);
+          validCount++;
+        }
+      }
+      
+      console.log(`✅ [后端] 从文件加载了 ${validCount} 个有效hash缓存`);
+      return validCount;
+    }
+  } catch (error) {
+    console.error('❌ [后端] 加载Hash缓存失败:', error);
+  }
+  return 0;
+}
+
+// 计算文件的 MD5 哈希值
+function calculateFileHash(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('md5');
+    const stream = fs.createReadStream(filePath);
+    
+    stream.on('data', (data) => hash.update(data));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
+
 // 通用文件上传配置
 const fileUpload = multer({
-  storage: storage,
-  // 文件大小限制已移除，允许上传任意大小的文件
+  ...multerConfig,
+
   fileFilter: function (req, file, cb) {
     console.log('🔍 [后端] 检查文件类型:', {
       originalname: file.originalname,
       mimetype: file.mimetype,
       fieldname: file.fieldname
     });
-    
+
     // 只检查危险文件扩展名，允许所有其他文件类型
     const dangerousExts = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.com', '.jar', '.js', '.vbs', '.ps1'];
     const fileExt = path.extname(file.originalname).toLowerCase();
-    
+
     if (dangerousExts.includes(fileExt)) {
       console.error('❌ [后端] 危险文件类型被拒绝:', fileExt);
       cb(new Error('不允许上传可执行文件'));
@@ -174,7 +383,7 @@ app.post('/api/upload/image', authenticateToken, imageUpload.single('image'), (r
 });
 
 // 通用文件上传路由
-app.post('/api/upload/file', authenticateToken, (req, res) => {
+app.post('/api/upload/file', authenticateToken, async (req, res) => {
   console.log('🔄 [后端] 收到文件上传请求:', {
     method: req.method,
     url: req.url,
@@ -186,7 +395,7 @@ app.post('/api/upload/file', authenticateToken, (req, res) => {
     user: req.user ? req.user.username : '未知用户'
   });
 
-  fileUpload.single('file')(req, res, (err) => {
+  fileUpload.single('file')(req, res, async (err) => {
     if (err) {
       console.error('❌ [后端] Multer处理错误:', {
         name: err.name,
@@ -228,9 +437,26 @@ app.post('/api/upload/file', authenticateToken, (req, res) => {
         path: req.file.path
       });
 
+      // 从请求中获取客户端计算的 hash（如果有）
+      const clientHash = req.body.hash;
+      if (clientHash) {
+        // 使用客户端计算的 hash，避免重复计算
+        fileHashCache.set(req.file.filename, clientHash);
+        console.log('💾 [后端] 使用客户端提供的hash:', req.file.filename, '->', clientHash);
+      } else {
+        // 如果没有客户端hash，则服务器计算（向后兼容）
+        const fileHash = await calculateFileHash(req.file.path);
+        fileHashCache.set(req.file.filename, fileHash);
+        console.log('💾 [后端] 服务器计算hash并缓存:', req.file.filename, '->', fileHash);
+      }
+
+      // 保存hash缓存到文件
+      await saveHashCache();
+
       const fileUrl = `/uploads/${req.file.filename}`;
       const responseData = {
         success: true,
+        isDuplicate: false,
         fileUrl: fileUrl,
         filename: req.file.filename,
         originalName: decodedOriginalName,
@@ -238,7 +464,7 @@ app.post('/api/upload/file', authenticateToken, (req, res) => {
         mimetype: req.file.mimetype
       };
 
-      console.log('🎉 [后端] 文件上传成功，返回响应:', responseData);
+      console.log('🎉 [后端] 新文件上传成功，返回响应:', responseData);
       res.json(responseData);
       
     } catch (error) {
@@ -449,13 +675,39 @@ const onlineUsers = new Map();
 // Socket认证中间件
 const authenticateSocket = async (socket, next) => {
   try {
-    const token = socket.handshake.auth.token;
-    console.log(`Socket连接尝试: ${socket.id}`);
-    console.log(`Token存在: ${!!token}`);
+    console.log(`\n========== Socket 认证开始 ==========`);
+    console.log(`Socket ID: ${socket.id}`);
+    console.log(`Handshake auth:`, socket.handshake.auth);
+    console.log(`Handshake headers cookie:`, socket.handshake.headers.cookie ? '存在' : '不存在');
+    
+    // 首先尝试从 auth.token 获取
+    let token = socket.handshake.auth.token;
+    console.log(`从 auth.token 获取:`, token ? '存在' : '不存在');
+    
+    // 如果没有，尝试从 Cookie 中获取
+    if (!token && socket.handshake.headers.cookie) {
+      const cookies = socket.handshake.headers.cookie;
+      console.log(`完整Cookie字符串:`, cookies);
+      
+      // 解析 Cookie 字符串
+      const cookieArray = cookies.split(';');
+      for (const cookie of cookieArray) {
+        const [name, value] = cookie.trim().split('=');
+        console.log(`解析Cookie: ${name} = ${value ? value.substring(0, 20) + '...' : '空'}`);
+        if (name === 'token') {
+          token = value;
+          console.log(`✅ 从Cookie中提取到token`);
+          break;
+        }
+      }
+    }
+    
+    console.log(`最终Token状态:`, token ? '存在' : '不存在');
     
     // 允许无token的基础连接，但标记为未认证
     if (!token) {
-      console.log(`Socket ${socket.id}: 无Token，标记为未认证`);
+      console.log(`❌ Socket ${socket.id}: 无Token，标记为未认证`);
+      console.log(`====================================\n`);
       socket.isAuthenticated = false;
       return next();
     }
@@ -476,17 +728,21 @@ const authenticateSocket = async (socket, next) => {
     }
     
     if (!user) {
-      console.log(`Socket ${socket.id}: 用户不存在，标记为未认证`);
+      console.log(`❌ Socket ${socket.id}: 用户不存在，标记为未认证`);
+      console.log(`====================================\n`);
       socket.isAuthenticated = false;
       return next();
     }
     
-    console.log(`Socket ${socket.id}: 认证成功，用户: ${user.username}`);
+    console.log(`✅ Socket ${socket.id}: 认证成功，用户: ${user.username}`);
+    console.log(`====================================\n`);
     socket.user = user;
     socket.isAuthenticated = true;
     next();
   } catch (error) {
-    console.log(`Socket ${socket.id}: 认证错误: ${error.message}`);
+    console.log(`❌ Socket ${socket.id}: 认证错误: ${error.message}`);
+    console.log(`错误详情:`, error);
+    console.log(`====================================\n`);
     socket.isAuthenticated = false;
     next();
   }
@@ -1247,6 +1503,9 @@ app.use((err, req, res, next) => {
 });
 
 // 启动服务器 - 监听所有网络接口以支持局域网访问
+server.keepAliveTimeout = 2 * 60 * 60 * 1000; // 2小时keep-alive
+server.headersTimeout = 2 * 60 * 60 * 1000 + 1000; // 略长于keepAliveTimeout
+
 server.listen(PORT, '0.0.0.0', () => {
   const localIP = getLocalIP();
   console.log('\n🚀 WJAirDrop 聊天服务器已启动!');

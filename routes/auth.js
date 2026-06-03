@@ -18,12 +18,19 @@ const generateToken = (userId) => {
 // 验证JWT令牌中间件
 const authenticateToken = async (req, res, next) => {
   try {
-    // 支持从 Authorization header 或 query 参数 token 获取 JWT
+    // 支持从 Authorization header、query 参数 token 或 Cookie 获取 JWT
     const authHeader = req.headers['authorization'];
     let token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    
     if (!token && req.query && req.query.token) {
       token = req.query.token;
       console.log('从 query.token 中获取令牌');
+    }
+    
+    // 如果还没有token，尝试从Cookie中获取
+    if (!token && req.cookies && req.cookies.token) {
+      token = req.cookies.token;
+      console.log('从 Cookie 中获取令牌');
     }
     
     if (!token) {
@@ -324,6 +331,15 @@ router.post('/login', async (req, res) => {
     console.log(`用户登录成功: ${user.username}, ID: ${user._id}`);
     console.log(`生成Token包含用户ID: ${user._id}`);
     
+    // 设置HttpOnly Cookie（7天有效期）
+    res.cookie('token', token, {
+      httpOnly: true,  // 防止XSS攻击
+      secure: process.env.NODE_ENV === 'production',  // 生产环境只通过HTTPS传输
+      sameSite: 'lax',  // CSRF保护
+      maxAge: 7 * 24 * 60 * 60 * 1000,  // 7天
+      path: '/'  // 所有路径都可访问
+    });
+    
     res.json({
       success: true,
       message: '登录成功',
@@ -516,6 +532,32 @@ router.put('/password', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: '密码修改失败'
+    });
+  }
+});
+
+// 用户登出 - 清除Cookie
+router.post('/logout', (req, res) => {
+  try {
+    // 清除token cookie
+    res.clearCookie('token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/'
+    });
+    
+    console.log('用户登出，Cookie已清除');
+    
+    res.json({
+      success: true,
+      message: '登出成功'
+    });
+  } catch (error) {
+    console.error('登出错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '登出失败'
     });
   }
 });

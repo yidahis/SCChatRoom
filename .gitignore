@@ -9,6 +9,8 @@ __pycache__/
 
 uploads/
 
+.file-hash-cache.json
+
 .vercel/
 
 

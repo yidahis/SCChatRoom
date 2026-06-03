@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import UsersSidebar from './UsersSidebar';
@@ -12,6 +13,7 @@ function ChatScreen({ currentUser, socket, onLogout }) {
   const [showFileList, setShowFileList] = useState(false);
   const [showFileBrowser, setShowFileBrowser] = useState(false);
   const [serverIP, setServerIP] = useState('');
+  const [showQRCode, setShowQRCode] = useState(false); // 控制二维码显示
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -20,9 +22,7 @@ function ChatScreen({ currentUser, socket, onLogout }) {
     // 获取服务器IP地址
     const getServerIP = async () => {
       try {
-        // 从当前协议和主机名构建基础URL
-        const baseHost = window.location.protocol + '//' + window.location.hostname + ':3678';
-        const response = await fetch(baseHost + '/api/server-info');
+        const response = await fetch('/api/server-info');
         const data = await response.json();
         setServerIP(data.ip + ':3678');
       } catch (error) {
@@ -100,8 +100,56 @@ function ChatScreen({ currentUser, socket, onLogout }) {
         <div className="header-content">
           <div className="chat-info">
             <h2>WJAirDrop - 全局聊天室</h2>
-            <div className="server-ip" style={{ fontSize: '10px', color: 'white' }}>
-              服务器地址: {serverIP}
+            <div 
+              className="server-ip" 
+              style={{ fontSize: '10px', color: 'white', cursor: 'pointer', position: 'relative' }}
+              onMouseEnter={() => setShowQRCode(true)}
+              onMouseLeave={() => setShowQRCode(false)}
+            >
+              访问地址: {(() => {
+                // 提取IP地址部分，将端口改为前端端口3001
+                const ipWithoutPort = serverIP.split(':')[0];
+                return `${ipWithoutPort}:3001`;
+              })()}
+              
+              {/* 二维码悬浮框 */}
+              {showQRCode && serverIP && (() => {
+                // 提取IP地址部分，将端口改为前端端口3001
+                const ipWithoutPort = serverIP.split(':')[0];
+                const frontendURL = `http://${ipWithoutPort}:3001`;
+                
+                return (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: '0',
+                    marginTop: '8px',
+                    padding: '12px',
+                    backgroundColor: 'white',
+                    borderRadius: '8px',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                    zIndex: 1000,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}>
+                    <QRCodeSVG 
+                      value={frontendURL}
+                      size={150}
+                      level="H"
+                      includeMargin={true}
+                    />
+                    <div style={{ 
+                      fontSize: '12px', 
+                      color: '#666',
+                      textAlign: 'center'
+                    }}>
+                      {frontendURL}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             <span className="user-count">{onlineUsers.length} 人在线</span>
           </div>
